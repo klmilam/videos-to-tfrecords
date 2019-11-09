@@ -1,0 +1,6 @@
+*.h5
+*.pyc
+*.egg-info
+MANIFEST
+__pycache__
+venv
