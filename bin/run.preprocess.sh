@@ -6,6 +6,7 @@
 #   TYPE (optional): run type. If "cloud", then preprocessing will be ruun on
 #       Dataflow.
 
+
 . ./bin/_common.sh
 
 TYPE=${1:-"local"}
