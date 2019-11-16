@@ -16,6 +16,11 @@ source ./venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Set up environment variables
+```
+PROJECT_ID={project-id}
+```
+
 ### Prepare video files (input data)
 The Apache Beam pipeline will use Google Cloud Storage as the source.
 
@@ -26,10 +31,15 @@ gsutil mb gs://{project-id}
 ```
 
 ```bash
-gsutil -m cp -r gs://ugc-dataset/original_videos/ gs://{project-id}/videos-to-tfrecords/input/
+gsutil -m cp -r gs://ugc-dataset/original_videos/* \
+    gs://${PROJECT_ID}/videos-to-tfrecords/input/
 ```
 
+
 ## Run Script
+The Bash scripts below assume that you have created a GCS directory gs://{project-id}/videos-to-tfrecords/input/ which stores your training data.
+#TODO(kmilam): Support custom input directories
+
 ### Run locally
 Useful for testing and debugging
 ```bash
