@@ -14,6 +14,7 @@ gcloud config set project {project-id}
 python3 -m venv venv
 source ./venv/bin/activate
 pip install -r requirements.txt
+brew install ffmpeg
 ```
 
 ### Set up environment variables
@@ -41,7 +42,7 @@ The Bash scripts below assume that you have created a GCS directory gs://{projec
 #TODO(kmilam): Support custom input directories
 
 ### Run locally
-Useful for testing and debugging
+Running an Apache Beam pipeline locally can be helpful for testing and debugging. However, it's not recommended when working with a lot of data; use the Cloud Dataflow runner for Apache Beam instead.
 ```bash
 bash bin/run.preprocess.sh
 ```

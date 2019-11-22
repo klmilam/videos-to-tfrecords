@@ -3,7 +3,7 @@ from setuptools import setup
 
 NAME = "Videos-To-TFRecords"
 VERSION = "1.0"
-REQUIRED_PACKAGES = []
+REQUIRED_PACKAGES = ['ffmpeg']
 
 setup(
     name=NAME,

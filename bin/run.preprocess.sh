@@ -31,6 +31,7 @@ if [ "${TYPE}" == "cloud" ]; then
     rm -rf *.egg-info
 
 else
+    INPUT_DIR="${INPUT_DIR}/Lecture/360P"
     python -m preprocessing.run_preprocess \
         --output_dir "${OUTPUT_DIR}" \
         --project_id "${PROJECT_ID}" \
