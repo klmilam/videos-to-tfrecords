@@ -3,9 +3,7 @@
 import apache_beam as beam
 import tensorflow as tf
 import os
-import cv2
 import numpy as np
-import urllib
 import io
 import os
 import tempfile
@@ -63,5 +61,5 @@ def build_pipeline(p, args):
     frames = (
         filenames | beam.ParDo(VideoToFrames())
     )
-    frames | beam.Map(print)
+    filenames | beam.Map(print)
 

@@ -67,7 +67,7 @@ def get_pipeline_options(args):
             "job_name": args.job_name,
             "setup_file": args.setup_file,
             "staging_location": os.path.join(args.job_dir, "staging"),
-            "temp_location": os.path.join(args.job_dir, "tmp")
+            "temp_location": os.path.join(args.job_dir, "tmp"),
         })
     pipeline_options = beam.pipeline.PipelineOptions(flags=[], **options)
     return pipeline_options

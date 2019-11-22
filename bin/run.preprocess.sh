@@ -26,6 +26,7 @@ if [ "${TYPE}" == "cloud" ]; then
         --output_dir "${OUTPUT_DIR}" \
         --project_id "${PROJECT_ID}" \
         --input_dir "${INPUT_DIR}" \
+        --setup_file ./setup.py \
         --cloud
 
     rm -rf *.egg-info
