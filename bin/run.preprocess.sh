@@ -18,6 +18,7 @@ BUCKET="gs://${PROJECT_ID}/videos-to-tfrecords"
 JOB_DIR="${BUCKET}/jobs/${JOB_NAME}"
 INPUT_DIR="${BUCKET}/input"
 OUTPUT_DIR="${BUCKET}/data/${NOW}"
+SA_KEY=${GOOGLE_APPLICATION_CREDENTIALS}
 
 if [ "${TYPE}" == "cloud" ]; then
     python -m preprocessing.run_preprocess \
@@ -27,6 +28,7 @@ if [ "${TYPE}" == "cloud" ]; then
         --project_id "${PROJECT_ID}" \
         --input_dir "${INPUT_DIR}" \
         --setup_file ./setup.py \
+        --service_account_key_file "{SA_KEY}" \
         --cloud
 
     rm -rf *.egg-info
@@ -36,5 +38,6 @@ else
     python -m preprocessing.run_preprocess \
         --output_dir "${OUTPUT_DIR}" \
         --project_id "${PROJECT_ID}" \
-        --input_dir "${INPUT_DIR}"
+        --input_dir "${INPUT_DIR}" \
+        --service_account_key_file "{SA_KEY}"
 fi

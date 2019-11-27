@@ -9,6 +9,7 @@ import os
 
 from preprocessing import preprocess
 
+
 def parse_arguments(argv):
     """Parses command line arguments."""
     parser = argparse.ArgumentParser(
@@ -53,6 +54,12 @@ def parse_arguments(argv):
         default="./setup.py",
         type=str,
         help="""Path to setup.py file.""")
+    parser.add_argument(
+        "--service_account_key_file",
+        type=str,
+        help="""Path to service account key file. If the job is running on the
+        cloud, the file should be stored on GCS.""",
+        required=True)
     args, _ = parser.parse_known_args(args=argv[1:])
     return args
 
@@ -67,7 +74,7 @@ def get_pipeline_options(args):
             "job_name": args.job_name,
             "setup_file": args.setup_file,
             "staging_location": os.path.join(args.job_dir, "staging"),
-            "temp_location": os.path.join(args.job_dir, "tmp"),
+            "temp_location": os.path.join(args.job_dir, "tmp")
         })
     pipeline_options = beam.pipeline.PipelineOptions(flags=[], **options)
     return pipeline_options
