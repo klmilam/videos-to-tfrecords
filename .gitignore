@@ -4,3 +4,4 @@
 MANIFEST
 __pycache__
 venv
+*.json

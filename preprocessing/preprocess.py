@@ -11,10 +11,21 @@ import cv2
 import datetime
 import urllib
 from google.cloud import storage
+import tensorflow_hub as hub
 
+from preprocessing import features
 
-def generate_download_signed_url_v4(service_account_file, bucket_name, blob_name):
-    """Generates a v4 signed URL for downloading a blob."""
+def generate_download_signed_url_v4(service_account_file, bucket_name,
+                                    blob_name):
+    """Generates a v4 signed URL for downloading a blob.
+
+    To use OpenCV's VideoCapture method, video files must be available either
+    at a local directory or at a public URL. This function creates signed URLs
+    to access video files in GCS.
+
+    The service account key is copied locally so that it is accessible to the
+    Storage client.
+    """
     local_key = tempfile.NamedTemporaryFile(suffix=".json").name
     tf.io.gfile.copy(service_account_file, local_key)
     storage_client = storage.Client.from_service_account_json(local_key)
@@ -45,16 +56,8 @@ class GetFilenames(beam.DoFn):
         return tf.io.gfile.glob(path)
 
 
-class ConcatPaths(beam.DoFn):
-    """Transform to create file paths."""
-    def process(self, element):
-        """Concatenates directory and filename."""
-        for file in element[2]:
-            logging.info(os.path.join(element[0], file))
-            yield os.path.join(element[0], file)
-
-
 class VideoToFrames(beam.DoFn):
+    """Transform to read a video file from GCS and extract frames."""
     def __init__(self, service_account_file):
         self.service_account_file = service_account_file
 
@@ -64,24 +67,43 @@ class VideoToFrames(beam.DoFn):
             self.service_account_file, u.netloc, u.path[1:])
         input_video = cv2.VideoCapture(signed_url)
         result, image = input_video.read()
+        # TODO: test without resizing
+        image = cv2.resize(
+            image, dsize=(299, 299), interpolation=cv2.INTER_CUBIC)
+        image = image/255.
+        image = image[:, :, ::-1]  # OpenCV orders channels BGR
+        image = image[np.newaxis, :, :, :]  # Add batch dimension
         input_video.release()
-        logging.info(image)
         return [image]
 
 
+class Inception(beam.DoFn):
+    """Transform to extract Inception-V3 bottleneck features."""
+    def process(self, element):
+        inputs = tf.keras.Input(shape=(299, 299, 3))
+        inception_layer = hub.KerasLayer(
+            "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
+            output_shape=2048,
+            trainable=False
+        )
+        output = inception_layer(inputs)
+        m = tf.keras.Model(inputs, output)
+        return {'logits': m.predict(element)}
+
+
 def build_pipeline(p, args):
+    path = os.path.join(args.input_dir, "*", "*", "*")
+    files = tf.io.gfile.glob(path)
     filenames = (
         p
-        | "CreateFilePattern" >> beam.Create([args.input_dir])
-        | "GetWalks" >> beam.ParDo(GetFilenames())
+        | "CreateFilePattern" >> beam.Create(files)
         # TODO: compare filenames' suffix to list of video suffix types
         | "FilterVideos" >> beam.Filter(lambda x: x.split(".")[-1] == "mkv")
+        | "FilterVideos2" >> beam.Filter(lambda x: x.split("/")[-2] == "360P")
     )
-    key_file = "gs://internal-klm/videos-to-tfrecords/internal-klm-c5ab3b3ba702.json"
     frames = (
         filenames
-        | beam.ParDo(VideoToFrames(key_file))
-        | beam.Map(lambda x: (1, x))
+        | beam.ParDo(VideoToFrames(args.service_account_key_file))
+        | beam.ParDo(Inception())
     )
-    filenames | beam.Map(print)
-
+    frames | beam.Map(print)
