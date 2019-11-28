@@ -88,11 +88,22 @@ class Inception(beam.DoFn):
     """Transform to extract Inception-V3 bottleneck features."""
     def process(self, element):
         inputs = tf.keras.Input(shape=(None, None, 3))
-        inception_layer = hub.KerasLayer(
-            "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
-            output_shape=2048,
-            trainable=False
-        )
+        try:
+            temp_files = tf.io.gfile.glob(
+                os.path.join(tempfile.gettempdir(), "tfhub_modules", "*"))
+            cached = temp_files[0] if "txt" not in temp_files[0] else temp_files[1]
+            inception_layer = hub.KerasLayer(
+                cached,
+                output_shape=2048,
+                trainable=False
+            )
+        except:
+            # First run will automatically cache the model on the workers
+            inception_layer = hub.KerasLayer(
+                "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
+                output_shape=2048,
+                trainable=False
+            )
         output = inception_layer(inputs)
         model = tf.keras.Model(inputs, output)
         logits = model.predict(element['image'])
