@@ -63,8 +63,7 @@ def parse_arguments(argv):
     parser.add_argument(
         "--frame_sample_rate",
         type=int,
-        help="""Number of milliseconds between each sample. Default is 1000 (1
-        second).""",
+        help="Number of milliseconds between each sample. Default is 500.",
         default=500)
     args, _ = parser.parse_known_args(args=argv[1:])
     return args

@@ -29,14 +29,13 @@ def generate_download_signed_url_v4(service_account_file, bucket_name,
     local_key = tempfile.NamedTemporaryFile(suffix=".json").name
     tf.io.gfile.copy(service_account_file, local_key)
     storage_client = storage.Client.from_service_account_json(local_key)
+    os.remove(local_key)
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(blob_name)
 
     url = blob.generate_signed_url(
         version='v4',
-        # This URL is valid for 15 minutes
         expiration=datetime.timedelta(minutes=15),
-        # Allow GET requests using this URL.
         method='GET')
     return url
 
@@ -44,14 +43,7 @@ def generate_download_signed_url_v4(service_account_file, bucket_name,
 class GetFilenames(beam.DoFn):
     """Transform to list contents of directory recursively."""
     def process(self, path):
-        """Returns contents of every directory.
-        Args:
-            path: path to top-level of input data directory.
- 
-        Returns:
-            One 3-tuple for each directory of format (pathname of directory,
-            list of its subdirectories, list of its files)
-        """
+        """Returns contents of every directory."""
         path = os.path.join(path, "*", "*", "*")
         return tf.io.gfile.glob(path)
 
@@ -66,14 +58,15 @@ class VideoToFrames(beam.DoFn):
         u = urllib.parse.urlparse(filename)
         signed_url = generate_download_signed_url_v4(
             self.service_account_file, u.netloc, u.path[1:])
-
         video = cv2.VideoCapture(signed_url)
+
         last_ts = -9999
+        result, image = video.read()
         while(video.isOpened()):
-            result, image = video.read()
+            # Only record frames occurring every skip_msec
             while video.get(cv2.CAP_PROP_POS_MSEC) < self.skip_msec + last_ts:
-                print(video.get(cv2.CAP_PROP_POS_MSEC))
-                if not video.read()[0]:
+                result, image = video.read()
+                if not result:
                     return
             last_ts = video.get(cv2.CAP_PROP_POS_MSEC)
             image = image/255.  # Normalize
@@ -83,7 +76,7 @@ class VideoToFrames(beam.DoFn):
                 'image': image,
                 'filename': filename,
                 'timestamp_ms': last_ts,
-                'frame_per_sec': video.get(cv2.CAP_PROP_FPS),
+                'frame_per_sec': round(video.get(cv2.CAP_PROP_FPS)),
                 'frame_total': video.get(cv2.CAP_PROP_FRAME_COUNT),
             }
             yield output
