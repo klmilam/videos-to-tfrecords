@@ -74,7 +74,11 @@ class VideoToFrames(beam.DoFn):
         image = image[:, :, ::-1]  # OpenCV orders channels BGR
         image = image[np.newaxis, :, :, :]  # Add batch dimension
         input_video.release()
-        return [image]
+        output = {
+            'image': image,
+            'filename': filename,
+        }
+        yield output
 
 
 class Inception(beam.DoFn):
@@ -88,7 +92,12 @@ class Inception(beam.DoFn):
         )
         output = inception_layer(inputs)
         m = tf.keras.Model(inputs, output)
-        return {'logits': m.predict(element)}
+        logits = m.predict(element['image'])
+        output = {
+            'logits': logits,
+            'filename': element['filename'],
+        }
+        yield output
 
 
 def build_pipeline(p, args):

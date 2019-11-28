@@ -70,6 +70,9 @@ def get_pipeline_options(args):
     if args.cloud:
         if not args.job_dir:
             raise ValueError("Job directory must be specified for Dataflow.")
+        if args.service_account_key_file.split("/")[0] != "gs":
+            raise ValueError("""Service account keys must be uploaded to GCS
+                for Dataflow.""")
         options.update({
             "job_name": args.job_name,
             "setup_file": args.setup_file,
