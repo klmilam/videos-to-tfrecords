@@ -34,14 +34,15 @@ def parse_arguments(argv):
         "--output_dir",
         type=str,
         help="""Local directory or GCS bucket to write training, validation,
-        and testing TFRecords.""")
+        and testing TFRecords.""",
+        required=True)
     parser.add_argument(
         "--input_dir",
         type=str,
         help="""Local directory or GCS bucket containing video files.""")
     parser.add_argument(
         "--log_level",
-        default="INFO",
+        default="DEBUG",
         type=str,
         help="Set logging level.")
     parser.add_argument(
@@ -90,7 +91,7 @@ def get_pipeline_options(args):
 
 def main():
     """Configures and runs an Apache Beam pipeline."""
-    args = parse_arguments(sys.argv[1:])
+    args = parse_arguments(sys.argv)
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
     options = get_pipeline_options(args)
     runner = "DataflowRunner" if args.cloud else "DirectRunner"

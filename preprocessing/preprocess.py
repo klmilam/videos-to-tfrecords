@@ -81,32 +81,34 @@ class VideoToFrames(beam.DoFn):
             }
             yield output
         video.release()
+        cv2.destroyAllWindows()
 
 
 
 class Inception(beam.DoFn):
     """Transform to extract Inception-V3 bottleneck features."""
-    def process(self, element):
+    def __init__(self):
+        self._model = None
+        self.initialized = False
+
+    def initialize(self):
         inputs = tf.keras.Input(shape=(None, None, 3))
-        try:
-            temp_files = tf.io.gfile.glob(
-                os.path.join(tempfile.gettempdir(), "tfhub_modules", "*"))
-            cached = temp_files[0] if "txt" not in temp_files[0] else temp_files[1]
-            inception_layer = hub.KerasLayer(
-                cached,
-                output_shape=2048,
-                trainable=False
-            )
-        except:
-            # First run will automatically cache the model on the workers
-            inception_layer = hub.KerasLayer(
-                "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
-                output_shape=2048,
-                trainable=False
-            )
+        inception_layer = hub.KerasLayer(
+            "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
+            output_shape=2048,
+            trainable=False
+        )
         output = inception_layer(inputs)
         model = tf.keras.Model(inputs, output)
-        logits = model.predict(element['image'])
+        self._model = model
+        self.initialized = True
+
+
+    def process(self, element):
+        if not self.initialized:
+            logging.info("Initializing model.")
+            self.initialize()
+        logits = self._model.predict(element['image'])
         del element['image']
         element['logits'] = logits
         yield element
@@ -119,12 +121,14 @@ def build_pipeline(p, args):
         p
         | "CreateFilePattern" >> beam.Create(files)
         # TODO: compare filenames' suffix to list of video suffix types
-        | "FilterVideos" >> beam.Filter(lambda x: x.split(".")[-1] == "mkv")
+        | "FilterVideos" >> beam.Filter(lambda x: x.split(".")[-1] == "mkv" and
+            x.split("/")[-2] == "360P")
     )
     frames = (
         filenames
-        | beam.ParDo(VideoToFrames(
+        | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate))
-        | beam.ParDo(Inception())
+        | "ApplyInception" >> beam.ParDo(Inception())
     )
+    frames | beam.io.WriteToText(args.output_dir+"/output/data.txt")
     frames | beam.Map(print)
