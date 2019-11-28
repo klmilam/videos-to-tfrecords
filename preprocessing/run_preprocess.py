@@ -60,6 +60,12 @@ def parse_arguments(argv):
         help="""Path to service account key file. If the job is running on the
         cloud, the file should be stored on GCS.""",
         required=True)
+    parser.add_argument(
+        "--frame_sample_rate",
+        type=int,
+        help="""Number of milliseconds between each sample. Default is 1000 (1
+        second).""",
+        default=500)
     args, _ = parser.parse_known_args(args=argv[1:])
     return args
 
@@ -70,7 +76,7 @@ def get_pipeline_options(args):
     if args.cloud:
         if not args.job_dir:
             raise ValueError("Job directory must be specified for Dataflow.")
-        if args.service_account_key_file.split("/")[0] != "gs":
+        if args.service_account_key_file.split(":")[0] != "gs":
             raise ValueError("""Service account keys must be uploaded to GCS
                 for Dataflow.""")
         options.update({

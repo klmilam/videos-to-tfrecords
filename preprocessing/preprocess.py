@@ -58,46 +58,54 @@ class GetFilenames(beam.DoFn):
 
 class VideoToFrames(beam.DoFn):
     """Transform to read a video file from GCS and extract frames."""
-    def __init__(self, service_account_file):
+    def __init__(self, service_account_file, skip_msec):
         self.service_account_file = service_account_file
+        self.skip_msec = skip_msec
 
     def process(self, filename):
         u = urllib.parse.urlparse(filename)
         signed_url = generate_download_signed_url_v4(
             self.service_account_file, u.netloc, u.path[1:])
-        input_video = cv2.VideoCapture(signed_url)
-        result, image = input_video.read()
-        # TODO: test without resizing
-        image = cv2.resize(
-            image, dsize=(299, 299), interpolation=cv2.INTER_CUBIC)
-        image = image/255.
-        image = image[:, :, ::-1]  # OpenCV orders channels BGR
-        image = image[np.newaxis, :, :, :]  # Add batch dimension
-        input_video.release()
-        output = {
-            'image': image,
-            'filename': filename,
-        }
-        yield output
+
+        video = cv2.VideoCapture(signed_url)
+        last_ts = -9999
+        while(video.isOpened()):
+            result, image = video.read()
+            while video.get(cv2.CAP_PROP_POS_MSEC) < self.skip_msec + last_ts:
+                print(video.get(cv2.CAP_PROP_POS_MSEC))
+                if not video.read()[0]:
+                    return
+            last_ts = video.get(cv2.CAP_PROP_POS_MSEC)
+            image = image/255.  # Normalize
+            image = image[:, :, ::-1]  # OpenCV orders channels BGR
+            image = image[np.newaxis, :, :, :]  # Add batch dimension
+            output = {
+                'image': image,
+                'filename': filename,
+                'timestamp_ms': last_ts,
+                'frame_per_sec': video.get(cv2.CAP_PROP_FPS),
+                'frame_total': video.get(cv2.CAP_PROP_FRAME_COUNT),
+            }
+            yield output
+        video.release()
+
 
 
 class Inception(beam.DoFn):
     """Transform to extract Inception-V3 bottleneck features."""
     def process(self, element):
-        inputs = tf.keras.Input(shape=(299, 299, 3))
+        inputs = tf.keras.Input(shape=(None, None, 3))
         inception_layer = hub.KerasLayer(
             "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
             output_shape=2048,
             trainable=False
         )
         output = inception_layer(inputs)
-        m = tf.keras.Model(inputs, output)
-        logits = m.predict(element['image'])
-        output = {
-            'logits': logits,
-            'filename': element['filename'],
-        }
-        yield output
+        model = tf.keras.Model(inputs, output)
+        logits = model.predict(element['image'])
+        del element['image']
+        element['logits'] = logits
+        yield element
 
 
 def build_pipeline(p, args):
@@ -108,11 +116,11 @@ def build_pipeline(p, args):
         | "CreateFilePattern" >> beam.Create(files)
         # TODO: compare filenames' suffix to list of video suffix types
         | "FilterVideos" >> beam.Filter(lambda x: x.split(".")[-1] == "mkv")
-        | "FilterVideos2" >> beam.Filter(lambda x: x.split("/")[-2] == "360P")
     )
     frames = (
         filenames
-        | beam.ParDo(VideoToFrames(args.service_account_key_file))
+        | beam.ParDo(VideoToFrames(
+            args.service_account_key_file, args.frame_sample_rate))
         | beam.ParDo(Inception())
     )
     frames | beam.Map(print)
