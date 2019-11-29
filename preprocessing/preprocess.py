@@ -43,15 +43,47 @@ def randomly_split(p, train_size, validation_size, test_size):
         def process(self, element):
             r = random.random()
             if r < test_size:
-                element["dataset"] = "test"
+                element["dataset"] = "Test"
             elif r < 1 - train_size:
-                element["dataset"] = "val"
+                element["dataset"] = "Val"
             else:
-                element["dataset"] = "train"
+                element["dataset"] = "Train"
             yield element
 
     split_data = p | "SplitData" >> beam.ParDo(_SplitData())
     return split_data
+
+
+@beam.ptransform_fn
+def shuffle(p):
+    """Shuffles the given pCollection."""
+
+    return (p
+            | 'PairWithRandom' >> beam.Map(lambda x: (random.random(), x))
+            | 'GroupByRandom' >> beam.GroupByKey()
+            | 'DropRandom' >> beam.FlatMap(lambda x: x[1]))
+
+
+@beam.ptransform_fn
+def WriteTFRecord(p, prefix, output_dir, metadata):
+    """Shuffles and write the given pCollection as a TF-Record.
+    Args:
+        p: a pCollection.
+        prefix: prefix for location TFRecord will be written to.
+        output_dir: the directory or bucket to write the json data.
+        metadata
+    """
+    coder = tft.coders.ExampleProtoCoder(metadata.schema)
+    prefix = str(prefix).lower()
+    out_dir = os.path.join(output_dir, 'data', prefix, prefix)
+    logging.warning("writing TFrecords to "+ out_dir)
+    (
+        p
+        | "ShuffleData" >> shuffle()  # pylint: disable=no-value-for-parameter
+        | "WriteTFRecord" >> beam.io.tfrecordio.WriteToTFRecord(
+            os.path.join(output_dir, 'data', prefix, prefix),
+            coder=coder,
+            file_name_suffix=".tfrecord"))
 
 
 def generate_download_signed_url_v4(service_account_file, bucket_name,
@@ -141,7 +173,6 @@ class Inception(beam.DoFn):
         self._model = model
         self.initialized = True
 
-
     def process(self, element):
         if not self.initialized:
             logging.info("Initializing model.")
@@ -176,12 +207,22 @@ def build_pipeline(p, args):
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate))
         | "ApplyInception" >> beam.ParDo(Inception()))
-    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "train")
+    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
     transform_fn = (
         (train, input_metadata)
         | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
     (
         transform_fn
         | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
-    # frames | beam.io.WriteToText(args.output_dir+"/output/data.txt")
     frames | beam.Map(print)
+    for dataset_type in ['Train', 'Val', 'Test']:
+        dataset = (
+            frames
+            | "Get{}Data".format(dataset_type) >> beam.Filter(
+                lambda x: x["dataset"] == dataset_type))
+        transform_label = 'Transform{}'.format(dataset_type)
+        t, metadata = (
+            ((dataset, input_metadata), transform_fn)
+            | transform_label >> tft_beam.TransformDataset())
+        write_label = 'Write{}TFRecord'.format(dataset_type)
+        t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
