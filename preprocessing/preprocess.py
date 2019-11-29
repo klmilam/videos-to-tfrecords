@@ -12,8 +12,47 @@ import datetime
 import urllib
 from google.cloud import storage
 import tensorflow_hub as hub
+import tensorflow_transform as tft
+from tensorflow_transform.beam import impl as tft_beam
+from tensorflow_transform.beam import tft_beam_io
+from tensorflow_transform.tf_metadata import dataset_schema
+from tensorflow_transform.tf_metadata import dataset_metadata
+import random
 
 from preprocessing import features
+
+
+@beam.ptransform_fn
+def randomly_split(p, train_size, validation_size, test_size):
+    """Randomly splits input pipeline in three sets based on input ratio.
+    Args:
+        p: PCollection, input pipeline.
+        train_size: float, ratio of data going to train set.
+        validation_size: float, ratio of data going to validation set.
+        test_size: float, ratio of data going to test set.
+    Returns:
+        Tuple of PCollection.
+    Raises:
+        ValueError: Train validation and test sizes don`t add up to 1.0.
+    """
+    if train_size + validation_size + test_size != 1.0:
+        raise ValueError(
+            "Train validation and test sizes don`t add up to 1.0.")
+
+    class _SplitData(beam.DoFn):
+        def process(self, element):
+            r = random.random()
+            if r < test_size:
+                element["dataset"] = "test"
+            elif r < 1 - train_size:
+                element["dataset"] = "val"
+            else:
+                element["dataset"] = "train"
+            yield element
+
+    split_data = p | "SplitData" >> beam.ParDo(_SplitData())
+    return split_data
+
 
 def generate_download_signed_url_v4(service_account_file, bucket_name,
                                     blob_name):
@@ -54,8 +93,8 @@ class VideoToFrames(beam.DoFn):
         self.service_account_file = service_account_file
         self.skip_msec = skip_msec
 
-    def process(self, filename):
-        u = urllib.parse.urlparse(filename)
+    def process(self, element):
+        u = urllib.parse.urlparse(element["filename"])
         signed_url = generate_download_signed_url_v4(
             self.service_account_file, u.netloc, u.path[1:])
         video = cv2.VideoCapture(signed_url)
@@ -72,13 +111,11 @@ class VideoToFrames(beam.DoFn):
             image = image/255.  # Normalize
             image = image[:, :, ::-1]  # OpenCV orders channels BGR
             image = image[np.newaxis, :, :, :]  # Add batch dimension
-            output = {
-                'image': image,
-                'filename': filename,
-                'timestamp_ms': last_ts,
-                'frame_per_sec': round(video.get(cv2.CAP_PROP_FPS)),
-                'frame_total': video.get(cv2.CAP_PROP_FRAME_COUNT),
-            }
+            output = element.copy()
+            output["image"] = image
+            output["timestamp_ms"] = last_ts
+            output["frame_per_sec"] = round(video.get(cv2.CAP_PROP_FPS))
+            output["frame_total"] = video.get(cv2.CAP_PROP_FRAME_COUNT)
             yield output
         video.release()
         cv2.destroyAllWindows()
@@ -92,6 +129,7 @@ class Inception(beam.DoFn):
         self.initialized = False
 
     def initialize(self):
+        """Initializes the model on the workers."""
         inputs = tf.keras.Input(shape=(None, None, 3))
         inception_layer = hub.KerasLayer(
             "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
@@ -117,18 +155,33 @@ class Inception(beam.DoFn):
 def build_pipeline(p, args):
     path = os.path.join(args.input_dir, "*", "*", "*")
     files = tf.io.gfile.glob(path)
+    input_metadata = dataset_metadata.DatasetMetadata(
+        dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
     filenames = (
         p
         | "CreateFilePattern" >> beam.Create(files)
+        | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         # TODO: compare filenames' suffix to list of video suffix types
-        | "FilterVideos" >> beam.Filter(lambda x: x.split(".")[-1] == "mkv" and
-            x.split("/")[-2] == "360P")
-    )
+        | "FilterVideos" >> beam.Filter(
+            lambda x: x["filename"].split(".")[-1] == "mkv" and
+                x["filename"].split("/")[-2] == "360P" and
+                x["filename"].split("/")[-1] == "Animation_360P-08c9.mkv")
+        | "RandomlySplitData" >> randomly_split(
+            train_size=.7,
+            validation_size=.15,
+            test_size=.15))
+
     frames = (
         filenames
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate))
-        | "ApplyInception" >> beam.ParDo(Inception())
-    )
-    frames | beam.io.WriteToText(args.output_dir+"/output/data.txt")
+        | "ApplyInception" >> beam.ParDo(Inception()))
+    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "train")
+    transform_fn = (
+        (train, input_metadata)
+        | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
+    (
+        transform_fn
+        | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
+    # frames | beam.io.WriteToText(args.output_dir+"/output/data.txt")
     frames | beam.Map(print)
