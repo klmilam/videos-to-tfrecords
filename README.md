@@ -17,7 +17,6 @@ gsutil cp {local-path-to-json} {cloud-storage-path-to-json}
 python3 -m venv venv
 source ./venv/bin/activate
 pip install -r requirements.txt
-brew install ffmpeg
 ```
 
 ### Set up environment variables
