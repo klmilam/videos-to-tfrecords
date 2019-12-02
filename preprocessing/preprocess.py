@@ -112,11 +112,15 @@ def generate_download_signed_url_v4(service_account_file, bucket_name,
 
 
 class GetFilenames(beam.DoFn):
-    """Transform to list contents of directory recursively."""
     def process(self, path):
-        """Returns contents of every directory."""
-        path = os.path.join(path, "*", "*", "*")
-        return tf.io.gfile.glob(path)
+        """Use tf.io.gfile.walk to support recursive lookups."""
+        return tf.io.gfile.walk(path)
+
+
+class ConcatPaths(beam.DoFn):
+    def process(self, element):
+        for file in element[2]:
+            yield os.path.join(element[0], file)
 
 
 class VideoToFrames(beam.DoFn):
@@ -153,7 +157,6 @@ class VideoToFrames(beam.DoFn):
         cv2.destroyAllWindows()
 
 
-
 class Inception(beam.DoFn):
     """Transform to extract Inception-V3 bottleneck features."""
     def __init__(self):
@@ -185,14 +188,15 @@ class Inception(beam.DoFn):
 
 def build_pipeline(p, args):
     path = os.path.join(args.input_dir, "*", "*", "*")
-    files = tf.io.gfile.glob(path)
     input_metadata = dataset_metadata.DatasetMetadata(
         dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
     filenames = (
         p
-        | "CreateFilePattern" >> beam.Create(files)
-        | "CreateDict" >> beam.Map(lambda x: {"filename": x})
+        | "CreateFilePattern" >> beam.Create([args.input_dir])
+        | "GetWalks" >> beam.ParDo(GetFilenames())
         # TODO: compare filenames' suffix to list of video suffix types
+        | "ConcatPaths" >> beam.ParDo(ConcatPaths())
+        | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         | "FilterVideos" >> beam.Filter(
             lambda x: x["filename"].split(".")[-1] == "mkv" and
                 x["filename"].split("/")[-2] == "360P" and
@@ -202,27 +206,28 @@ def build_pipeline(p, args):
             validation_size=.15,
             test_size=.15))
 
-    frames = (
-        filenames
-        | "ExtractFrames" >> beam.ParDo(VideoToFrames(
-            args.service_account_key_file, args.frame_sample_rate))
-        | "ApplyInception" >> beam.ParDo(Inception()))
-    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
-    transform_fn = (
-        (train, input_metadata)
-        | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
-    (
-        transform_fn
-        | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
-    frames | beam.Map(print)
-    for dataset_type in ['Train', 'Val', 'Test']:
-        dataset = (
-            frames
-            | "Get{}Data".format(dataset_type) >> beam.Filter(
-                lambda x: x["dataset"] == dataset_type))
-        transform_label = 'Transform{}'.format(dataset_type)
-        t, metadata = (
-            ((dataset, input_metadata), transform_fn)
-            | transform_label >> tft_beam.TransformDataset())
-        write_label = 'Write{}TFRecord'.format(dataset_type)
-        t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
+    filenames | beam.Map(print)
+    # frames = (
+    #     filenames
+    #     | "ExtractFrames" >> beam.ParDo(VideoToFrames(
+    #         args.service_account_key_file, args.frame_sample_rate))
+    #     | "ApplyInception" >> beam.ParDo(Inception()))
+    # train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
+    # transform_fn = (
+    #     (train, input_metadata)
+    #     | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
+    # (
+    #     transform_fn
+    #     | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
+    # frames | beam.Map(print)
+    # for dataset_type in ['Train', 'Val', 'Test']:
+    #     dataset = (
+    #         frames
+    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
+    #             lambda x: x["dataset"] == dataset_type))
+    #     transform_label = 'Transform{}'.format(dataset_type)
+    #     t, metadata = (
+    #         ((dataset, input_metadata), transform_fn)
+    #         | transform_label >> tft_beam.TransformDataset())
+    #     write_label = 'Write{}TFRecord'.format(dataset_type)
+    #     t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
