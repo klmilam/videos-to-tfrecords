@@ -1,6 +1,8 @@
 # videos-to-tfrecords
 Library to convert video files to TFRecords using Apache Beam.
 
+Note: This is not an officially supported Google product
+
 ## Set up
 ### Set up GCP credentials
 ```bash
