@@ -198,6 +198,11 @@ class Inception(beam.DoFn):
         yield element
 
 
+def extract_label(element):
+    element["label"] = element["filename"].split("/")[-3]
+    return element
+
+
 def build_pipeline(p, args):
     input_metadata = dataset_metadata.DatasetMetadata(
         dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
@@ -216,9 +221,9 @@ def build_pipeline(p, args):
             train_size=.7,
             validation_size=.15,
             test_size=.15))
-
+    data = filenames | beam.Map(extract_label)
     frames = (
-        filenames
+        data
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate))
         | "ApplyInception" >> beam.ParDo(Inception()))
