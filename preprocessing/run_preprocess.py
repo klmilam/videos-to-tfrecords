@@ -80,6 +80,12 @@ def parse_arguments(argv):
         type=int,
         help="Number of milliseconds between each sample. Default is 500.",
         default=500)
+    parser.add_argument(
+        "--sequence_length",
+        type=int,
+        help="""Length of each sequence (in milliseconds) per sample. This
+        corresponds to window length.""",
+        default=1000)
     args, _ = parser.parse_known_args(args=argv[1:])
     return args
 

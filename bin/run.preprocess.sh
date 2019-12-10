@@ -49,6 +49,7 @@ if [ "${TYPE}" == "cloud" ]; then
     rm -rf *.egg-info
 
 else
+    INPUT_DIR="gs://internal-klm/videos-to-tfrecords/input/Animation/360P"
     python -m preprocessing.run_preprocess \
         --output_dir "${OUTPUT_DIR}" \
         --project_id "${PROJECT_ID}" \

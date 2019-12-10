@@ -141,7 +141,7 @@ class VideoToFrames(beam.DoFn):
         self.service_account_file = service_account_file
         self.skip_msec = skip_msec
 
-    def process(self, element):
+    def process(self, element, cloud=True):
         u = urllib.parse.urlparse(element["filename"])
         signed_url = generate_download_signed_url_v4(
             self.service_account_file, u.netloc, u.path[1:])
@@ -149,7 +149,8 @@ class VideoToFrames(beam.DoFn):
 
         last_ts = -9999
         result, image = video.read()
-        while(video.isOpened()):
+        next_video = True
+        while(video.isOpened() and next_video):
             # Only record frames occurring every skip_msec
             while video.get(cv2.CAP_PROP_POS_MSEC) < self.skip_msec + last_ts:
                 result, image = video.read()
@@ -164,6 +165,7 @@ class VideoToFrames(beam.DoFn):
             output["timestamp_ms"] = last_ts
             output["frame_per_sec"] = round(video.get(cv2.CAP_PROP_FPS))
             output["frame_total"] = video.get(cv2.CAP_PROP_FRAME_COUNT)
+            next_video = False if not cloud else True
             yield output
         video.release()
         cv2.destroyAllWindows()
@@ -199,8 +201,31 @@ class Inception(beam.DoFn):
 
 
 def extract_label(element):
+    """Extracts and appends label from filename.
+
+    Assumes there's one label per video.
+    """
     element["label"] = element["filename"].split("/")[-3]
     return element
+
+
+class AddTimestamp(beam.DoFn):
+    def process(self, element):
+        yield beam.window.TimestampedValue(element, element["timestamp_ms"])
+
+
+class SetWindowVideoAsKey(beam.DoFn):
+    """Transform to extract the window and set it as the key."""
+    def process(self, element, window=beam.DoFn.WindowParam):
+        """Sets an element's key as its key.
+        Args:
+            element: processing element (dict).
+            window: the window that the element belongs to.
+        Yields:
+            key-value pair of a window and the input element, respectively.
+        """
+        if float(window.start) >= 0:
+            yield ((window, element["filename"]), element)
 
 
 def build_pipeline(p, args):
@@ -215,8 +240,7 @@ def build_pipeline(p, args):
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         | "FilterVideos" >> beam.Filter(
             lambda x: x["filename"].split(".")[-1] == "mkv" and
-                x["filename"].split("/")[-2] == "360P" and
-                x["filename"].split("/")[-1] == "Animation_360P-08c9.mkv")
+                x["filename"].split("/")[-2] == "360P")
         | "RandomlySplitData" >> randomly_split(
             train_size=.7,
             validation_size=.15,
@@ -225,9 +249,16 @@ def build_pipeline(p, args):
     frames = (
         data
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
-            args.service_account_key_file, args.frame_sample_rate))
+            args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyInception" >> beam.ParDo(Inception()))
     train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
+    windowed_data = (
+        train
+        | "AddTimestamp" >> beam.ParDo(AddTimestamp())
+        | "ApplyWindow" >> beam.WindowInto(beam.window.SlidingWindows(
+                args.sequence_length, 100))
+        | "AddWindowAsKey" >> beam.ParDo(SetWindowVideoAsKey()))
+    windowed_data | beam.Map(print)
     transform_fn = (
         (train, input_metadata)
         | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
