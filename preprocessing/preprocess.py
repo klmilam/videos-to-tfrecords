@@ -254,9 +254,8 @@ def build_pipeline(p, args):
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyInception" >> beam.ParDo(Inception()))
-    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
-    if args.crop_video:
-        windowed_data = (
+    if args.mode == "crop_video":
+        frames = (
             train
             | "AddTimestamp" >> beam.ParDo(AddTimestamp())
             | "ApplyWindow" >> beam.WindowInto(beam.window.SlidingWindows(
@@ -266,29 +265,30 @@ def build_pipeline(p, args):
             | "GroupByKey" >> beam.GroupByKey()
             | "CombineToList" >> beam.CombinePerKey(
                 combiners.ToListCombineFn()))
-    else:
-        windowed_data = (
+    elif args.mode == "full_video":
+        frames = (
             train
             | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
             | "GroupByKey" >> beam.GroupByKey()
             | "CombineToList" >> beam.CombinePerKey(
                 combiners.ToListCombineFn()))
-    windowed_data | beam.Map(print)
-    transform_fn = (
-        (train, input_metadata)
-        | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
-    (
-        transform_fn
-        | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
-    # frames | beam.Map(print)
-    for dataset_type in ['Train', 'Val', 'Test']:
-        dataset = (
-            frames
-            | "Get{}Data".format(dataset_type) >> beam.Filter(
-                lambda x: x["dataset"] == dataset_type))
-        transform_label = 'Transform{}'.format(dataset_type)
-        t, metadata = (
-            ((dataset, input_metadata), transform_fn)
-            | transform_label >> tft_beam.TransformDataset())
-        write_label = 'Write{}TFRecord'.format(dataset_type)
-        t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
+    frames | beam.Map(print)
+    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
+    # transform_fn = (
+    #     (train, input_metadata)
+    #     | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
+    # (
+    #     transform_fn
+    #     | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
+    # # frames | beam.Map(print)
+    # for dataset_type in ['Train', 'Val', 'Test']:
+    #     dataset = (
+    #         frames
+    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
+    #             lambda x: x["dataset"] == dataset_type))
+    #     transform_label = 'Transform{}'.format(dataset_type)
+    #     t, metadata = (
+    #         ((dataset, input_metadata), transform_fn)
+    #         | transform_label >> tft_beam.TransformDataset())
+    #     write_label = 'Write{}TFRecord'.format(dataset_type)
+    #     t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)

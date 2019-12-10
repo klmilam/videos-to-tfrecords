@@ -81,10 +81,10 @@ def parse_arguments(argv):
         help="Number of milliseconds between each sample. Default is 500.",
         default=500)
     parser.add_argument(
-        "--crop_video",
-        help="""Crop video. Default False.""",
-        action="store_true",
-        default=False)
+        "--mode",
+        choices=["crop_video", "single_frame", "full_video"],
+        help="""""",
+        default="full_video")
     parser.add_argument(
         "--sequence_length",
         type=int,

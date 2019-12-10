@@ -17,7 +17,8 @@
 # Convenience script for running preproccessing pipeline.
 #
 # Arguments:
-#   SERVICE ACCCOUNT KEY (optional): Path to service account key
+#   SERVICE ACCCOUNT KEY: Path to service account key
+#   MODE (optional): Mode indicating how many frames should be written to each sample.
 #   TYPE (optional): run type. If "cloud", then preprocessing will be run on
 #       Dataflow. If "local_crop", then preprocessing will be run locally with
 #       cropping.
@@ -25,7 +26,8 @@
 . ./bin/_common.sh
 
 SA_KEY=${1:-GOOGLE_APPLICATION_CREDENTIALS}
-TYPE=${2:-"local"}
+MODE=${2:-"full_video"}
+TYPE=${3:-"local"}
 
 PROJECT_ID="$(get_project_id)"
 NOW="$(get_date_time)"
@@ -44,17 +46,9 @@ if [ "${TYPE}" == "cloud" ]; then
         --input_dir "${INPUT_DIR}" \
         --setup_file ./setup.py \
         --service_account_key_file "${SA_KEY}" \
+        --mode "${MODE}" \
         --cloud
     rm -rf *.egg-info
-
-elif [ "${TYPE}" == "local_crop" ]; then
-    INPUT_DIR="gs://internal-klm/videos-to-tfrecords/input/Animation/360P"
-    python -m preprocessing.run_preprocess \
-        --output_dir "${OUTPUT_DIR}" \
-        --project_id "${PROJECT_ID}" \
-        --input_dir "${INPUT_DIR}" \
-        --service_account_key_file "${SA_KEY}" \
-        --crop_video
 
 else
     INPUT_DIR="gs://internal-klm/videos-to-tfrecords/input/Animation/360P"
@@ -62,5 +56,7 @@ else
         --output_dir "${OUTPUT_DIR}" \
         --project_id "${PROJECT_ID}" \
         --input_dir "${INPUT_DIR}" \
-        --service_account_key_file "${SA_KEY}"
+        --service_account_key_file "${SA_KEY}" \
+        --mode "${MODE}" \
+
 fi
