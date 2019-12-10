@@ -231,6 +231,20 @@ class SetWindowVideoAsKey(beam.DoFn):
             yield ((window, element["filename"]), element)
 
 
+class FormatFeatures(beam.DoFn):
+    def process(self, element):
+        # TODO: support per-frame labels
+        per_sample_keys = ["label", "filename", "dataset", "frame_per_sec",
+                           "frame_total"]
+        per_sample_output = {key:element[0][key] for key in per_sample_keys}
+
+        per_frame_keys = ["timestamp_ms", "logits"]
+        per_frame_output = {key:[d[key] for d in element] for key in per_frame_keys}
+
+        output = {**per_sample_output, **per_frame_output}
+        return [output]
+
+
 def build_pipeline(p, args):
     input_metadata = dataset_metadata.DatasetMetadata(
         dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
@@ -238,9 +252,9 @@ def build_pipeline(p, args):
         p
         | "CreateFilePattern" >> beam.Create([args.input_dir])
         | "GetWalks" >> beam.ParDo(GetFilenames())
-        # TODO: compare filenames' suffix to list of video suffix types
         | "ConcatPaths" >> beam.ParDo(ConcatPaths())
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
+        # TODO: compare filenames' suffix to list of supported video suffix types
         | "FilterVideos" >> beam.Filter(
             lambda x: x["filename"].split(".")[-1] == "mkv" and
                 x["filename"].split("/")[-2] == "360P")
@@ -256,25 +270,35 @@ def build_pipeline(p, args):
         | "ApplyInception" >> beam.ParDo(Inception()))
     if args.mode == "crop_video":
         period = args.period if args.period else args.sequence_length
-        print(period)
         frames = (
             frames
             | "AddTimestamp" >> beam.ParDo(AddTimestamp())
-            | "ApplyWindow" >> beam.WindowInto(beam.window.SlidingWindows(
-                    args.sequence_length, period))
+            | "ApplySlidingWindow" >> beam.WindowInto(
+                beam.window.SlidingWindows(args.sequence_length, period))
             | "AddWindowAndVideoAsKey" >> beam.ParDo(
                 SetWindowVideoAsKey(), args.sequence_length)
             | "GroupByKey" >> beam.GroupByKey()
             | "CombineToList" >> beam.CombinePerKey(
-                combiners.ToListCombineFn()))
+                combiners.ToListCombineFn())
+            | "ApplyGlobalWindow" >> beam.WindowInto(
+                beam.window.GlobalWindows())
+            | "UnKey" >> beam.Map(lambda x: x[1][0]))
     elif args.mode == "full_video":
         frames = (
             frames
             | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
             | "GroupByKey" >> beam.GroupByKey()
             | "CombineToList" >> beam.CombinePerKey(
-                combiners.ToListCombineFn()))
-    frames | beam.Map(print)
+                combiners.ToListCombineFn())
+            | "UnKey" >> beam.Map(lambda x: x[1][0]))
+    else:
+        frames = frames | "ToList" >> beam.Map(lambda x: [x])
+    all_frames = (
+        frames
+        | "SortFrames" >> beam.Map(
+            lambda x: sorted(x, key=lambda i: i["timestamp_ms"]))
+        | "ListDictsToDictLists" >> beam.ParDo(FormatFeatures()))
+    all_frames | beam.Map(print)
     # train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
     # transform_fn = (
     #     (train, input_metadata)
