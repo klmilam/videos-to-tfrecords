@@ -14,6 +14,7 @@
 """Build preprocessing pipeline."""
 
 import apache_beam as beam
+from apache_beam.transforms import combiners
 import tensorflow as tf
 import numpy as np
 import logging
@@ -149,8 +150,8 @@ class VideoToFrames(beam.DoFn):
 
         last_ts = -9999
         result, image = video.read()
-        next_video = True
-        while(video.isOpened() and next_video):
+        limit_local = 0
+        while(video.isOpened() and limit_local < 3):
             # Only record frames occurring every skip_msec
             while video.get(cv2.CAP_PROP_POS_MSEC) < self.skip_msec + last_ts:
                 result, image = video.read()
@@ -165,7 +166,7 @@ class VideoToFrames(beam.DoFn):
             output["timestamp_ms"] = last_ts
             output["frame_per_sec"] = round(video.get(cv2.CAP_PROP_FPS))
             output["frame_total"] = video.get(cv2.CAP_PROP_FRAME_COUNT)
-            next_video = False if not cloud else True
+            limit_local = limit_local + 1 if not cloud else 0
             yield output
         video.release()
         cv2.destroyAllWindows()
@@ -216,7 +217,7 @@ class AddTimestamp(beam.DoFn):
 
 class SetWindowVideoAsKey(beam.DoFn):
     """Transform to extract the window and set it as the key."""
-    def process(self, element, window=beam.DoFn.WindowParam):
+    def process(self, element, sequence_length, window=beam.DoFn.WindowParam):
         """Sets an element's key as its key.
         Args:
             element: processing element (dict).
@@ -224,7 +225,9 @@ class SetWindowVideoAsKey(beam.DoFn):
         Yields:
             key-value pair of a window and the input element, respectively.
         """
-        if float(window.start) >= 0:
+        video_length = 1000 * element["frame_total"] / element["frame_per_sec"]
+        if float(window.end) == sequence_length or float(
+            window.start) >= 0 and float(window.end) <= video_length:
             yield ((window, element["filename"]), element)
 
 
@@ -252,12 +255,24 @@ def build_pipeline(p, args):
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyInception" >> beam.ParDo(Inception()))
     train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
-    windowed_data = (
-        train
-        | "AddTimestamp" >> beam.ParDo(AddTimestamp())
-        | "ApplyWindow" >> beam.WindowInto(beam.window.SlidingWindows(
-                args.sequence_length, 100))
-        | "AddWindowAsKey" >> beam.ParDo(SetWindowVideoAsKey()))
+    if args.crop_video:
+        windowed_data = (
+            train
+            | "AddTimestamp" >> beam.ParDo(AddTimestamp())
+            | "ApplyWindow" >> beam.WindowInto(beam.window.SlidingWindows(
+                    args.sequence_length, 500))
+            | "AddWindowAndVideoAsKey" >> beam.ParDo(
+                SetWindowVideoAsKey(), args.sequence_length)
+            | "GroupByKey" >> beam.GroupByKey()
+            | "CombineToList" >> beam.CombinePerKey(
+                combiners.ToListCombineFn()))
+    else:
+        windowed_data = (
+            train
+            | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
+            | "GroupByKey" >> beam.GroupByKey()
+            | "CombineToList" >> beam.CombinePerKey(
+                combiners.ToListCombineFn()))
     windowed_data | beam.Map(print)
     transform_fn = (
         (train, input_metadata)

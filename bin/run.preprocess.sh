@@ -18,9 +18,9 @@
 #
 # Arguments:
 #   SERVICE ACCCOUNT KEY (optional): Path to service account key
-#   TYPE (optional): run type. If "cloud", then preprocessing will be ruun on
-#       Dataflow.
-
+#   TYPE (optional): run type. If "cloud", then preprocessing will be run on
+#       Dataflow. If "local_crop", then preprocessing will be run locally with
+#       cropping.
 
 . ./bin/_common.sh
 
@@ -45,8 +45,16 @@ if [ "${TYPE}" == "cloud" ]; then
         --setup_file ./setup.py \
         --service_account_key_file "${SA_KEY}" \
         --cloud
-
     rm -rf *.egg-info
+
+elif [ "${TYPE}" == "local_crop" ]; then
+    INPUT_DIR="gs://internal-klm/videos-to-tfrecords/input/Animation/360P"
+    python -m preprocessing.run_preprocess \
+        --output_dir "${OUTPUT_DIR}" \
+        --project_id "${PROJECT_ID}" \
+        --input_dir "${INPUT_DIR}" \
+        --service_account_key_file "${SA_KEY}" \
+        --crop_video
 
 else
     INPUT_DIR="gs://internal-klm/videos-to-tfrecords/input/Animation/360P"

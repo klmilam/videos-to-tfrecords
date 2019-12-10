@@ -81,11 +81,16 @@ def parse_arguments(argv):
         help="Number of milliseconds between each sample. Default is 500.",
         default=500)
     parser.add_argument(
+        "--crop_video",
+        help="""Crop video. Default False.""",
+        action="store_true",
+        default=False)
+    parser.add_argument(
         "--sequence_length",
         type=int,
-        help="""Length of each sequence (in milliseconds) per sample. This
-        corresponds to window length.""",
-        default=1000)
+        help="""Length (in milliseconds) to crop each video sample. This corresponds
+        to window length.""",
+        default=10000)
     args, _ = parser.parse_known_args(args=argv[1:])
     return args
 
