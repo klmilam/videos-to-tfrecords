@@ -255,11 +255,13 @@ def build_pipeline(p, args):
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyInception" >> beam.ParDo(Inception()))
     if args.mode == "crop_video":
+        period = args.period if args.period else args.sequence_length
+        print(period)
         frames = (
-            train
+            frames
             | "AddTimestamp" >> beam.ParDo(AddTimestamp())
             | "ApplyWindow" >> beam.WindowInto(beam.window.SlidingWindows(
-                    args.sequence_length, 500))
+                    args.sequence_length, period))
             | "AddWindowAndVideoAsKey" >> beam.ParDo(
                 SetWindowVideoAsKey(), args.sequence_length)
             | "GroupByKey" >> beam.GroupByKey()
@@ -267,13 +269,13 @@ def build_pipeline(p, args):
                 combiners.ToListCombineFn()))
     elif args.mode == "full_video":
         frames = (
-            train
+            frames
             | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
             | "GroupByKey" >> beam.GroupByKey()
             | "CombineToList" >> beam.CombinePerKey(
                 combiners.ToListCombineFn()))
     frames | beam.Map(print)
-    train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
+    # train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
     # transform_fn = (
     #     (train, input_metadata)
     #     | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))

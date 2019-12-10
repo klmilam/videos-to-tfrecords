@@ -83,7 +83,8 @@ def parse_arguments(argv):
     parser.add_argument(
         "--mode",
         choices=["crop_video", "single_frame", "full_video"],
-        help="""""",
+        help="""Indicator for how many frames should be stored for each
+        sample.""",
         default="full_video")
     parser.add_argument(
         "--sequence_length",
@@ -91,6 +92,11 @@ def parse_arguments(argv):
         help="""Length (in milliseconds) to crop each video sample. This corresponds
         to window length.""",
         default=10000)
+    parser.add_argument(
+        "--period",
+        type=int,
+        help="""Sliding window period (in milliseconds) between samples. If
+        left empty, fixed windows are used.""")
     args, _ = parser.parse_known_args(args=argv[1:])
     return args
 
