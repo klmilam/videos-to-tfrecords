@@ -17,6 +17,8 @@ import argparse
 import logging
 from datetime import datetime
 import apache_beam as beam
+from apache_beam.options.pipeline_options import PipelineOptions, WorkerOptions
+
 import sys
 import os
 from tensorflow_transform.beam import impl as tft_beam
@@ -44,6 +46,11 @@ def parse_arguments(argv):
         type=str,
         help="""GCS bucket to stage code and write temporaryy outputs for cloud
         runs.""")
+    parser.add_argument(
+        "--machine_type",
+        help="""Set machine type for Dataflow worker machines.""",
+        default="n1-highmem-4"
+    )
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -104,6 +111,7 @@ def parse_arguments(argv):
 def get_pipeline_options(args):
     """Returns pipeline options."""
     options = {"project": args.project_id}
+    # TODO: support CLI arg for high-mem CPUs
     if args.cloud:
         if not args.job_dir:
             raise ValueError("Job directory must be specified for Dataflow.")
@@ -116,7 +124,10 @@ def get_pipeline_options(args):
             "staging_location": os.path.join(args.job_dir, "staging"),
             "temp_location": os.path.join(args.job_dir, "tmp"),
         })
-    pipeline_options = beam.pipeline.PipelineOptions(flags=[], **options)
+        pipeline_options = PipelineOptions(flags=[], **options)
+        pipeline_options.view_as(WorkerOptions).machine_type = args.machine_type
+    else:
+        pipeline_options = PipelineOptions(flags=[], **options)
     return pipeline_options
 
 
