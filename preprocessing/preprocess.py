@@ -246,32 +246,42 @@ class FormatFeatures(beam.DoFn):
         return [output]
 
 
+@beam.ptransform_fn
+def create_filenames(p, files):
+    filenames = (
+        p
+        | "CreateFilePattern" >> beam.Create(files)
+        | "CreateDict" >> beam.Map(lambda x: {"filename": x})
+        # TODO: compare filenames' suffix to list of supported video suffix types
+        | "FilterVideos" >> beam.Filter(
+            lambda x: x["filename"].split(".")[-1] == "mkv" and
+                x["filename"].split("/")[-2] == "360P")
+    )
+    return filenames
+
+
 def build_pipeline(p, args):
     if args.cloud:
         path = os.path.join(args.input_dir, "*", "*", "*")
     else:
         path = os.path.join(args.input_dir, "*")
     files = tf.io.gfile.glob(path)
+
     filenames = (
         p
-        | "CreateFilePattern" >> beam.Create(files)
-        # | "GetWalks" >> beam.ParDo(GetFilenames())
-        # | "ConcatPaths" >> beam.ParDo(ConcatPaths())
-        | "CreateDict" >> beam.Map(lambda x: {"filename": x})
-        # TODO: compare filenames' suffix to list of supported video suffix types
-        | "FilterVideos" >> beam.Filter(
-            lambda x: x["filename"].split(".")[-1] == "mkv" and
-                x["filename"].split("/")[-2] == "360P")
+        | "CreateFilenames" >> create_filenames(files)
         | "RandomlySplitData" >> randomly_split(
             train_size=.7,
             validation_size=.15,
-            test_size=.15))
-    data = filenames | beam.Map(extract_label)
+            test_size=.15)
+        | "ExtractLabel" >> beam.Map(extract_label))
+
     frames = (
-        data
+        filenames
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyInception" >> beam.ParDo(Inception()))
+    
     if args.mode == "crop_video":
         period = args.period if args.period else args.sequence_length
         frames = (
