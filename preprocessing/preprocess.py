@@ -79,14 +79,22 @@ def shuffle(p):
 
 def generate_seq_example(element):
     feature_list_dict = {}
-    for feat in features.LIST_COLUMNS:
+    for feat, dtype in features.LIST_COLUMNS.items():
         feature_list = []
         for value in element[feat]:
             feature_list.append(
-                features.to_feature_list(value, features.LIST_COLUMNS[feat]))
+                features.to_feature_list(value, dtype))
         feature_list_dict[feat] = tf.train.FeatureList(feature=feature_list)
     feature_lists = tf.train.FeatureLists(feature_list=feature_list_dict)
-    seq_example = tf.train.SequenceExample(feature_lists=feature_lists)
+
+    context_dict = {}
+    for feat, dtype in features.CONTEXT_COLUMNS.items():
+        context_dict[feat] = features.to_feature_list(
+            element[feat], dtype)
+    context = tf.train.Features(feature=context_dict)
+
+    seq_example = tf.train.SequenceExample(
+        context=context, feature_lists=feature_lists)
     return seq_example
 
 
@@ -246,9 +254,8 @@ class SetWindowVideoAsKey(beam.DoFn):
 class FormatFeatures(beam.DoFn):
     def process(self, element):
         # TODO: support per-frame labels
-        per_sample_keys = ["label", "filename", "dataset", "frame_per_sec",
-                           "frame_total"]
-        per_sample_output = {key:element[0][key] for key in per_sample_keys}
+        per_sample_output = {
+            key:element[0][key] for key in features.CONTEXT_COLUMNS}
 
         per_frame_output = {
             key:[d[key] for d in element] for key in features.LIST_COLUMNS}
@@ -318,6 +325,6 @@ def build_pipeline(p, args):
                 lambda x: x["dataset"] == dataset_type)
             | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
                 generate_seq_example))
-        dataset | "p{}".format(dataset_type) >> beam.Map(print)
+        # dataset | "p{}".format(dataset_type) >> beam.Map(print)
         write_label = 'Write{}TFRecord'.format(dataset_type)
         dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)

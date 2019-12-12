@@ -25,13 +25,28 @@ LIST_COLUMNS = {
     "timestamp_ms": FLOAT
 }
 
+CONTEXT_COLUMNS = {
+    "label": BYTES,
+    "filename": BYTES,
+    "dataset": BYTES,
+    "frame_per_sec": FLOAT,
+    "frame_total": FLOAT
+}
+
 
 def to_feature_list(value, dtype):
     if not isinstance(value, list):
-        value = [value]
+        value = [value]  # values must be lists
     if dtype == FLOAT:
+        # TODO: add error catching if not float (or not able to be cast to float)
         return tf.train.Feature(float_list=tf.train.FloatList(value=value))
     elif dtype == INT:
         return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
     elif dtype == BYTES:
+        if type(value[0]) == str:  # all elements in list should have same type
+            byte_values = []
+            for v in value:
+                byte_values.append(str.encode(v))
+            value = byte_values
         return tf.train.Feature(bytes_list=tf.train.BytesList(value=value))
+    # TODO: add error message if dtype not found
