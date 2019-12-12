@@ -14,35 +14,24 @@
 """Feature management for data preprocessing."""
 
 import tensorflow as tf
-import tensorflow_transform as tft
-from tensorflow_transform.tf_metadata import dataset_metadata
-from tensorflow_transform.tf_metadata import dataset_schema
 
 
-CATEGORICAL_COLUMNS = []
-STRING_COLUMNS = ["filename"]
-NUMERIC_COLUMNS = ["timestamp_ms", "frame_per_sec"]
-NUMERIC_LIST_COLUMNS =["image"]
-BOOLEAN_COLUMNS = []
+FLOAT = "float"
+INT = "int"
+BYTES = "bytes"
 
-def get_raw_feature_spec():
-    """Returns TF feature spec for preprocessing"""
-    features = dict(
-        [(name, tf.io.FixedLenFeature([], tf.string))
-            for name in CATEGORICAL_COLUMNS] +
-        [(name, tf.io.FixedLenFeature([], tf.string))
-            for name in STRING_COLUMNS] +
-        [(name, tf.io.FixedLenFeature([], tf.float32))
-            for name in NUMERIC_COLUMNS] +
-        [(name, tf.io.FixedLenFeature([], tf.int64))
-            for name in BOOLEAN_COLUMNS] +
-        [(name, tf.io.FixedLenFeature([], tf.float32))
-            for name in NUMERIC_LIST_COLUMNS]
-    )
-    return features
+LIST_COLUMNS = {
+    "logits": FLOAT,
+    "timestamp_ms": FLOAT
+}
 
 
-RAW_FEATURE_SPEC = get_raw_feature_spec()
-
-def preprocess(inputs):
-    return inputs.copy()
+def to_feature_list(value, dtype):
+    if not isinstance(value, list):
+        value = [value]
+    if dtype == FLOAT:
+        return tf.train.Feature(float_list=tf.train.FloatList(value=value))
+    elif dtype == INT:
+        return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
+    elif dtype == BYTES:
+        return tf.train.Feature(bytes_list=tf.train.BytesList(value=value))

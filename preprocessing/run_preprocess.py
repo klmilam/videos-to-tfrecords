@@ -85,7 +85,7 @@ def parse_arguments(argv):
         choices=["crop_video", "single_frame", "full_video"],
         help="""Indicator for how many frames should be stored for each
         sample.""",
-        default="full_video")
+        default="single_frame")
     parser.add_argument(
         "--sequence_length",
         type=int,
@@ -124,6 +124,7 @@ def main():
     """Configures and runs an Apache Beam pipeline."""
     args = parse_arguments(sys.argv)
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+    logging.warning("mode: " + args.mode)
     options = get_pipeline_options(args)
     runner = "DataflowRunner" if args.cloud else "DirectRunner"
     with beam.Pipeline(runner, options=options) as pipeline:

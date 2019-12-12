@@ -78,26 +78,25 @@ def shuffle(p):
 
 
 def generate_seq_example(element):
-    feature_list = []
-    for i in element["logits"]:
-        feature_list.append(tf.train.Feature(float_list=tf.train.FloatList(value=i)))
-    feature_list_dict = {
-        "logits": tf.train.FeatureList(feature=feature_list)
-    }
+    feature_list_dict = {}
+    for feat in features.LIST_COLUMNS:
+        feature_list = []
+        for value in element[feat]:
+            feature_list.append(
+                features.to_feature_list(value, features.LIST_COLUMNS[feat]))
+        feature_list_dict[feat] = tf.train.FeatureList(feature=feature_list)
     feature_lists = tf.train.FeatureLists(feature_list=feature_list_dict)
     seq_example = tf.train.SequenceExample(feature_lists=feature_lists)
     return seq_example
 
 
-
 @beam.ptransform_fn
-def WriteTFRecord(p, prefix, output_dir, metadata):
+def WriteTFRecord(p, prefix, output_dir):
     """Shuffles and write the given pCollection as a TF-Record.
     Args:
         p: a pCollection.
         prefix: prefix for location TFRecord will be written to.
         output_dir: the directory or bucket to write the json data.
-        metadata
     """
     coder = beam.coders.ProtoCoder(tf.train.SequenceExample)
     prefix = str(prefix).lower()
@@ -251,9 +250,8 @@ class FormatFeatures(beam.DoFn):
                            "frame_total"]
         per_sample_output = {key:element[0][key] for key in per_sample_keys}
 
-        per_frame_keys = ["timestamp_ms", "logits"]
         per_frame_output = {
-            key:[d[key] for d in element] for key in per_frame_keys}
+            key:[d[key] for d in element] for key in features.LIST_COLUMNS}
 
         output = {**per_sample_output, **per_frame_output}
         return [output]
@@ -321,9 +319,5 @@ def build_pipeline(p, args):
             | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
                 generate_seq_example))
         dataset | "p{}".format(dataset_type) >> beam.Map(print)
-        # transform_label = 'Transform{}'.format(dataset_type)
-        # t, metadata = (
-        #     ((dataset, input_metadata), transform_fn)
-        #     | transform_label >> tft_beam.TransformDataset())
-        # write_label = 'Write{}TFRecord'.format(dataset_type)
-        # t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
+        write_label = 'Write{}TFRecord'.format(dataset_type)
+        dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)

@@ -26,7 +26,7 @@
 . ./bin/_common.sh
 
 SA_KEY=${1:-GOOGLE_APPLICATION_CREDENTIALS}
-MODE=${2:-"full_video"}
+MODE=${2:-"single_frame"}
 TYPE=${3:-"local"}
 
 PROJECT_ID="$(get_project_id)"
