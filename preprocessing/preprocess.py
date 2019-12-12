@@ -77,6 +77,19 @@ def shuffle(p):
             | 'DropRandom' >> beam.FlatMap(lambda x: x[1]))
 
 
+def generate_seq_example(element):
+    feature_list = []
+    for i in element["logits"]:
+        feature_list.append(tf.train.Feature(float_list=tf.train.FloatList(value=i)))
+    feature_list_dict = {
+        "logits": tf.train.FeatureList(feature=feature_list)
+    }
+    feature_lists = tf.train.FeatureLists(feature_list=feature_list_dict)
+    seq_example = tf.train.SequenceExample(feature_lists=feature_lists)
+    return seq_example
+
+
+
 @beam.ptransform_fn
 def WriteTFRecord(p, prefix, output_dir, metadata):
     """Shuffles and write the given pCollection as a TF-Record.
@@ -86,7 +99,7 @@ def WriteTFRecord(p, prefix, output_dir, metadata):
         output_dir: the directory or bucket to write the json data.
         metadata
     """
-    coder = tft.coders.ExampleProtoCoder(metadata.schema)
+    coder = beam.coders.ProtoCoder(tf.train.SequenceExample)
     prefix = str(prefix).lower()
     out_dir = os.path.join(output_dir, 'data', prefix, prefix)
     logging.warning("writing TFrecords to "+ out_dir)
@@ -197,7 +210,7 @@ class Inception(beam.DoFn):
             self.initialize()
         logits = self._model.predict(element['image'])
         del element['image']
-        element['logits'] = logits
+        element['logits'] = np.squeeze(logits).tolist()
         yield element
 
 
@@ -239,15 +252,16 @@ class FormatFeatures(beam.DoFn):
         per_sample_output = {key:element[0][key] for key in per_sample_keys}
 
         per_frame_keys = ["timestamp_ms", "logits"]
-        per_frame_output = {key:[d[key] for d in element] for key in per_frame_keys}
+        per_frame_output = {
+            key:[d[key] for d in element] for key in per_frame_keys}
 
         output = {**per_sample_output, **per_frame_output}
         return [output]
 
 
 def build_pipeline(p, args):
-    input_metadata = dataset_metadata.DatasetMetadata(
-        dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
+    # input_metadata = dataset_metadata.DatasetMetadata(
+    #     dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
     filenames = (
         p
         | "CreateFilePattern" >> beam.Create([args.input_dir])
@@ -298,23 +312,18 @@ def build_pipeline(p, args):
         | "SortFrames" >> beam.Map(
             lambda x: sorted(x, key=lambda i: i["timestamp_ms"]))
         | "ListDictsToDictLists" >> beam.ParDo(FormatFeatures()))
-    all_frames | beam.Map(print)
-    # train = frames | "GetTrain" >> beam.Filter(lambda x: x["dataset"] == "Train")
-    # transform_fn = (
-    #     (train, input_metadata)
-    #     | 'AnalyzeTrain' >> tft_beam.AnalyzeDataset(features.preprocess))
-    # (
-    #     transform_fn
-    #     | 'WriteTransformFn' >> tft_beam_io.WriteTransformFn(args.output_dir))
-    # # frames | beam.Map(print)
-    # for dataset_type in ['Train', 'Val', 'Test']:
-    #     dataset = (
-    #         frames
-    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
-    #             lambda x: x["dataset"] == dataset_type))
-    #     transform_label = 'Transform{}'.format(dataset_type)
-    #     t, metadata = (
-    #         ((dataset, input_metadata), transform_fn)
-    #         | transform_label >> tft_beam.TransformDataset())
-    #     write_label = 'Write{}TFRecord'.format(dataset_type)
-    #     t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
+
+    for dataset_type in ['Train', 'Val', 'Test']:
+        dataset = (
+            all_frames
+            | "Get{}Data".format(dataset_type) >> beam.Filter(
+                lambda x: x["dataset"] == dataset_type)
+            | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
+                generate_seq_example))
+        dataset | "p{}".format(dataset_type) >> beam.Map(print)
+        # transform_label = 'Transform{}'.format(dataset_type)
+        # t, metadata = (
+        #     ((dataset, input_metadata), transform_fn)
+        #     | transform_label >> tft_beam.TransformDataset())
+        # write_label = 'Write{}TFRecord'.format(dataset_type)
+        # t | write_label >> WriteTFRecord(dataset_type, args.output_dir, metadata)
