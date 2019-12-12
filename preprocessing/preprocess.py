@@ -26,9 +26,6 @@ import datetime
 import urllib
 from google.cloud import storage
 import tensorflow_hub as hub
-import tensorflow_transform as tft
-from tensorflow_transform.beam import impl as tft_beam
-from tensorflow_transform.beam import tft_beam_io
 import random
 
 from preprocessing import features

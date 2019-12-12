@@ -21,7 +21,6 @@ from apache_beam.options.pipeline_options import PipelineOptions, WorkerOptions
 
 import sys
 import os
-from tensorflow_transform.beam import impl as tft_beam
 
 from preprocessing import preprocess
 
@@ -111,7 +110,6 @@ def parse_arguments(argv):
 def get_pipeline_options(args):
     """Returns pipeline options."""
     options = {"project": args.project_id}
-    # TODO: support CLI arg for high-mem CPUs
     if args.cloud:
         if not args.job_dir:
             raise ValueError("Job directory must be specified for Dataflow.")
@@ -139,8 +137,7 @@ def main():
     options = get_pipeline_options(args)
     runner = "DataflowRunner" if args.cloud else "DirectRunner"
     with beam.Pipeline(runner, options=options) as pipeline:
-        with tft_beam.Context(temp_dir=os.path.join(args.output_dir, "tmp")):
-            preprocess.build_pipeline(pipeline, args)
+        preprocess.build_pipeline(pipeline, args)
 
 
 if __name__ == "__main__":
