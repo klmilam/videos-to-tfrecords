@@ -290,6 +290,15 @@ def to_full_video(p, args):
         | "UnKey" >> beam.Map(lambda x: x[1][0]))
     return frames
 
+@beam.ptransform_fn
+def format_features(p):
+    all_frames = (
+        p
+        | "SortFrames" >> beam.Map(
+            lambda x: sorted(x, key=lambda i: i["timestamp_ms"]))
+        | "ListDictsToDictLists" >> beam.ParDo(FormatFeatures()))
+    return all_frames
+
 
 def build_pipeline(p, args):
     if args.cloud:
@@ -318,11 +327,7 @@ def build_pipeline(p, args):
     else:
         frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
     
-    all_frames = (
-        frames
-        | "SortFrames" >> beam.Map(
-            lambda x: sorted(x, key=lambda i: i["timestamp_ms"]))
-        | "ListDictsToDictLists" >> beam.ParDo(FormatFeatures()))
+    all_frames = frames | "FormatFeatures" >> format_features()
 
     for dataset_type in ['Train', 'Val', 'Test']:
         dataset = (
@@ -331,7 +336,7 @@ def build_pipeline(p, args):
                 lambda x: x["dataset"] == dataset_type)
             | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
                 generate_seq_example))
-        if not args.cloud:  # if running locally, print SequenceExamples
-            dataset | "p{}".format(dataset_type) >> beam.Map(print)
         write_label = 'Write{}TFRecord'.format(dataset_type)
         dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
+        if not args.cloud:  # if running locally, print SequenceExamples
+            dataset | "p{}".format(dataset_type) >> beam.Map(print)
