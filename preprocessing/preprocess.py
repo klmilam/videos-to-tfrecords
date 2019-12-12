@@ -29,8 +29,6 @@ import tensorflow_hub as hub
 import tensorflow_transform as tft
 from tensorflow_transform.beam import impl as tft_beam
 from tensorflow_transform.beam import tft_beam_io
-from tensorflow_transform.tf_metadata import dataset_schema
-from tensorflow_transform.tf_metadata import dataset_metadata
 import random
 
 from preprocessing import features
@@ -85,16 +83,15 @@ def generate_seq_example(element):
             feature_list.append(
                 features.to_feature_list(value, dtype))
         feature_list_dict[feat] = tf.train.FeatureList(feature=feature_list)
-    feature_lists = tf.train.FeatureLists(feature_list=feature_list_dict)
 
     context_dict = {}
     for feat, dtype in features.CONTEXT_COLUMNS.items():
         context_dict[feat] = features.to_feature_list(
             element[feat], dtype)
-    context = tf.train.Features(feature=context_dict)
 
     seq_example = tf.train.SequenceExample(
-        context=context, feature_lists=feature_lists)
+        context=tf.train.Features(feature=context_dict),
+        feature_lists=tf.train.FeatureLists(feature_list=feature_list_dict))
     return seq_example
 
 
@@ -142,18 +139,6 @@ def generate_download_signed_url_v4(service_account_file, bucket_name,
         expiration=datetime.timedelta(minutes=15),
         method='GET')
     return url
-
-
-class GetFilenames(beam.DoFn):
-    def process(self, path):
-        """Use tf.io.gfile.walk to support recursive lookups."""
-        return tf.io.gfile.walk(path)
-
-
-class ConcatPaths(beam.DoFn):
-    def process(self, element):
-        for file in element[2]:
-            yield os.path.join(element[0], file)
 
 
 class VideoToFrames(beam.DoFn):
@@ -265,13 +250,16 @@ class FormatFeatures(beam.DoFn):
 
 
 def build_pipeline(p, args):
-    # input_metadata = dataset_metadata.DatasetMetadata(
-    #     dataset_schema.from_feature_spec(features.RAW_FEATURE_SPEC))
+    if args.cloud:
+        path = os.path.join(args.input_dir, "*", "*", "*")
+    else:
+        path = os.path.join(args.input_dir, "*")
+    files = tf.io.gfile.glob(path)
     filenames = (
         p
-        | "CreateFilePattern" >> beam.Create([args.input_dir])
-        | "GetWalks" >> beam.ParDo(GetFilenames())
-        | "ConcatPaths" >> beam.ParDo(ConcatPaths())
+        | "CreateFilePattern" >> beam.Create(files)
+        # | "GetWalks" >> beam.ParDo(GetFilenames())
+        # | "ConcatPaths" >> beam.ParDo(ConcatPaths())
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         # TODO: compare filenames' suffix to list of supported video suffix types
         | "FilterVideos" >> beam.Filter(
@@ -325,6 +313,7 @@ def build_pipeline(p, args):
                 lambda x: x["dataset"] == dataset_type)
             | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
                 generate_seq_example))
-        # dataset | "p{}".format(dataset_type) >> beam.Map(print)
+        if not args.cloud:  # if running locally, print SequenceExamples
+            dataset | "p{}".format(dataset_type) >> beam.Map(print)
         write_label = 'Write{}TFRecord'.format(dataset_type)
         dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
