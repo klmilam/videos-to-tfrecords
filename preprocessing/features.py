@@ -35,6 +35,7 @@ CONTEXT_COLUMNS = {
 
 
 def to_feature_list(value, dtype):
+    """Wraps feature in a TF.Feature protocol message."""
     if not isinstance(value, list):
         value = [value]  # values must be lists
     if dtype == FLOAT:

@@ -34,6 +34,7 @@ from preprocessing import features
 @beam.ptransform_fn
 def randomly_split(p, train_size, validation_size, test_size):
     """Randomly splits input pipeline in three sets based on input ratio.
+
     Args:
         p: PCollection, input pipeline.
         train_size: float, ratio of data going to train set.
@@ -73,6 +74,7 @@ def shuffle(p):
 
 
 def generate_seq_example(element):
+    """Generates a SequenceExample protocol message."""
     feature_list_dict = {}
     for feat, dtype in features.LIST_COLUMNS.items():
         feature_list = []
@@ -95,6 +97,7 @@ def generate_seq_example(element):
 @beam.ptransform_fn
 def WriteTFRecord(p, prefix, output_dir):
     """Shuffles and write the given pCollection as a TF-Record.
+
     Args:
         p: a pCollection.
         prefix: prefix for location TFRecord will be written to.
@@ -175,7 +178,11 @@ class VideoToFrames(beam.DoFn):
 
 
 class Inception(beam.DoFn):
-    """Transform to extract Inception-V3 bottleneck features."""
+    """Transform to extract Inception-V3 bottleneck features.
+
+    Similar to Predict class in
+    https://github.com/GoogleCloudPlatform/healthcare/blob/master/datathon/datathon_etl_pipelines/generic_imaging/inference_to_bigquery.py
+    """
     def __init__(self):
         self._model = None
         self.initialized = False
@@ -213,6 +220,7 @@ def extract_label(element):
 
 
 class AddTimestamp(beam.DoFn):
+    """Wraps element in a TimestampedValue in order to support windowing."""
     def process(self, element):
         yield beam.window.TimestampedValue(element, element["timestamp_ms"])
 
@@ -234,6 +242,7 @@ class SetWindowVideoAsKey(beam.DoFn):
 
 
 class FormatFeatures(beam.DoFn):
+    """Converts list of frames' features to combined feature set."""
     def process(self, element):
         # TODO: support per-frame labels
         per_sample_output = {
@@ -248,6 +257,7 @@ class FormatFeatures(beam.DoFn):
 
 @beam.ptransform_fn
 def create_filenames(p, files):
+    """Cleans filenames PCollection."""
     filenames = (
         p
         | "CreateFilePattern" >> beam.Create(files)
@@ -255,13 +265,13 @@ def create_filenames(p, files):
         # TODO: compare filenames' suffix to list of supported video suffix types
         | "FilterVideos" >> beam.Filter(
             lambda x: x["filename"].split(".")[-1] == "mkv" and
-                x["filename"].split("/")[-2] == "360P")
-    )
+                x["filename"].split("/")[-2] == "360P"))
     return filenames
 
 
 @beam.ptransform_fn
 def crop_video(p, args):
+    """Combines all frames within a time interval from a single video."""
     period = args.period if args.period else args.sequence_length
     frames = (
         p
@@ -281,6 +291,7 @@ def crop_video(p, args):
 
 @beam.ptransform_fn
 def to_full_video(p, args):
+    """Combines all frames from a single video."""
     frames = (
         p
         | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
@@ -290,8 +301,10 @@ def to_full_video(p, args):
         | "UnKey" >> beam.Map(lambda x: x[1][0]))
     return frames
 
+
 @beam.ptransform_fn
 def format_features(p):
+    """Prepares data to be written to SequenceExamples."""
     all_frames = (
         p
         | "SortFrames" >> beam.Map(
@@ -301,6 +314,7 @@ def format_features(p):
 
 
 def build_pipeline(p, args):
+    """Creates Apache Beam pipeline."""
     if args.cloud:
         path = os.path.join(args.input_dir, "*", "*", "*")
     else:
