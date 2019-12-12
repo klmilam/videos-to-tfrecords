@@ -260,6 +260,37 @@ def create_filenames(p, files):
     return filenames
 
 
+@beam.ptransform_fn
+def crop_video(p, args):
+    period = args.period if args.period else args.sequence_length
+    frames = (
+        p
+        | "AddTimestamp" >> beam.ParDo(AddTimestamp())
+        | "ApplySlidingWindow" >> beam.WindowInto(
+            beam.window.SlidingWindows(args.sequence_length, period))
+        | "AddWindowAndVideoAsKey" >> beam.ParDo(
+            SetWindowVideoAsKey(), args.sequence_length)
+        | "GroupByKey" >> beam.GroupByKey()
+        | "CombineToList" >> beam.CombinePerKey(
+            combiners.ToListCombineFn())
+        | "ApplyGlobalWindow" >> beam.WindowInto(
+            beam.window.GlobalWindows())
+        | "UnKey" >> beam.Map(lambda x: x[1][0]))
+    return frames
+
+
+@beam.ptransform_fn
+def to_full_video(p, args):
+    frames = (
+        p
+        | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
+        | "GroupByKey" >> beam.GroupByKey()
+        | "CombineToList" >> beam.CombinePerKey(
+            combiners.ToListCombineFn())
+        | "UnKey" >> beam.Map(lambda x: x[1][0]))
+    return frames
+
+
 def build_pipeline(p, args):
     if args.cloud:
         path = os.path.join(args.input_dir, "*", "*", "*")
@@ -271,9 +302,7 @@ def build_pipeline(p, args):
         p
         | "CreateFilenames" >> create_filenames(files)
         | "RandomlySplitData" >> randomly_split(
-            train_size=.7,
-            validation_size=.15,
-            test_size=.15)
+            train_size=.7, validation_size=.15, test_size=.15)
         | "ExtractLabel" >> beam.Map(extract_label))
 
     frames = (
@@ -283,30 +312,12 @@ def build_pipeline(p, args):
         | "ApplyInception" >> beam.ParDo(Inception()))
     
     if args.mode == "crop_video":
-        period = args.period if args.period else args.sequence_length
-        frames = (
-            frames
-            | "AddTimestamp" >> beam.ParDo(AddTimestamp())
-            | "ApplySlidingWindow" >> beam.WindowInto(
-                beam.window.SlidingWindows(args.sequence_length, period))
-            | "AddWindowAndVideoAsKey" >> beam.ParDo(
-                SetWindowVideoAsKey(), args.sequence_length)
-            | "GroupByKey" >> beam.GroupByKey()
-            | "CombineToList" >> beam.CombinePerKey(
-                combiners.ToListCombineFn())
-            | "ApplyGlobalWindow" >> beam.WindowInto(
-                beam.window.GlobalWindows())
-            | "UnKey" >> beam.Map(lambda x: x[1][0]))
+        frames = frames | "CropVideo" >> crop_video(args)
     elif args.mode == "full_video":
-        frames = (
-            frames
-            | "SetVideoAsKey" >> beam.Map(lambda x: (x["filename"], x))
-            | "GroupByKey" >> beam.GroupByKey()
-            | "CombineToList" >> beam.CombinePerKey(
-                combiners.ToListCombineFn())
-            | "UnKey" >> beam.Map(lambda x: x[1][0]))
+        frames = frames | "ToFullVideo" >> to_full_video(args) 
     else:
-        frames = frames | "ToList" >> beam.Map(lambda x: [x])
+        frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
+    
     all_frames = (
         frames
         | "SortFrames" >> beam.Map(
