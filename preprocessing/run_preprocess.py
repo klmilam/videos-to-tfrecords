@@ -133,7 +133,7 @@ def main():
     """Configures and runs an Apache Beam pipeline."""
     args = parse_arguments(sys.argv)
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
-    logging.warning("mode: " + args.mode)
+    logging.info("mode: " + args.mode)
     options = get_pipeline_options(args)
     runner = "DataflowRunner" if args.cloud else "DirectRunner"
     with beam.Pipeline(runner, options=options) as pipeline:

@@ -14,11 +14,13 @@
 """Feature management for data preprocessing."""
 
 import tensorflow as tf
+import logging
 
 
 FLOAT = "float"
 INT = "int"
 BYTES = "bytes"
+OTHER = ""
 
 LIST_COLUMNS = {
     "logits": FLOAT,
@@ -50,4 +52,5 @@ def to_feature_list(value, dtype):
                 byte_values.append(str.encode(v))
             value = byte_values
         return tf.train.Feature(bytes_list=tf.train.BytesList(value=value))
-    # TODO: add error message if dtype not found
+    else:
+        logging.warning("Type {} not supported.".format(type(value[0])))

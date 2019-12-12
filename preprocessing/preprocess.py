@@ -79,14 +79,16 @@ def generate_seq_example(element):
     for feat, dtype in features.LIST_COLUMNS.items():
         feature_list = []
         for value in element[feat]:
-            feature_list.append(
-                features.to_feature_list(value, dtype))
+            feature = features.to_feature_list(value, dtype)
+            if feature:
+                feature_list.append(feature)
         feature_list_dict[feat] = tf.train.FeatureList(feature=feature_list)
 
     context_dict = {}
     for feat, dtype in features.CONTEXT_COLUMNS.items():
-        context_dict[feat] = features.to_feature_list(
-            element[feat], dtype)
+        feature = features.to_feature_list(element[feat], dtype)
+        if feature:
+            context_dict[feat] = feature
 
     seq_example = tf.train.SequenceExample(
         context=tf.train.Features(feature=context_dict),

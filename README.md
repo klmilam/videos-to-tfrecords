@@ -10,7 +10,7 @@ gcloud auth login
 gcloud auth application-default login
 gcloud config set project {project-id}
 ```
-If you will be running the pipeline on the Dataflow Runner, the service account key should be accessible to the Dataflow workers. So, the file should be copied from its local path to Google Cloud Storage.
+If you will be running the pipeline on the Dataflow Runner, the service account key must be accessible to the Dataflow workers. So, the file should be copied from its local path to Google Cloud Storage.
 ```bash
 gsutil cp {local-path-to-json} {cloud-storage-path-to-json}
 ```
