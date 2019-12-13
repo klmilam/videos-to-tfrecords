@@ -53,11 +53,11 @@ def randomly_split(p, train_size, validation_size, test_size):
         def process(self, element):
             r = random.random()
             if r < test_size:
-                element["dataset"] = "Test"
+                element["dataset"] = "Train"
             elif r < 1 - train_size:
                 element["dataset"] = "Val"
             else:
-                element["dataset"] = "Train"
+                element["dataset"] = "Test"
             yield element
 
     split_data = p | "SplitData" >> beam.ParDo(_SplitData())
@@ -264,10 +264,8 @@ def create_filenames(p, files):
         p
         | "CreateFilePattern" >> beam.Create(files)
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
-        # TODO: compare filenames' suffix to list of supported video suffix types
         | "FilterVideos" >> beam.Filter(
-            lambda x: x["filename"].split(".")[-1] == "mkv" and
-                x["filename"].split("/")[-2] == "360P"))
+            lambda x: x["filename"].split(".")[-1] in ["mkv", "avi", "mp4"]))
     return filenames
 
 

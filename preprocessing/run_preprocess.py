@@ -48,7 +48,7 @@ def parse_arguments(argv):
     parser.add_argument(
         "--machine_type",
         help="""Set machine type for Dataflow worker machines.""",
-        default="n1-highmem-4"
+        default="n1-highmem-16"
     )
     parser.add_argument(
         "--output_dir",
@@ -97,12 +97,13 @@ def parse_arguments(argv):
         type=int,
         help="""Length (in milliseconds) to crop each video sample. This corresponds
         to window length.""",
-        default=10000)
+        default=15000)
     parser.add_argument(
         "--period",
         type=int,
         help="""Sliding window period (in milliseconds) between samples. If
-        left empty, fixed windows are used.""")
+        left empty, fixed windows are used.""",
+        default=1000)
     args, _ = parser.parse_known_args(args=argv[1:])
     return args
 
