@@ -27,6 +27,7 @@ import urllib
 from google.cloud import storage
 import tensorflow_hub as hub
 import random
+import time
 
 from preprocessing import features
 
@@ -53,11 +54,11 @@ def randomly_split(p, train_size, validation_size, test_size):
         def process(self, element):
             r = random.random()
             if r < test_size:
-                element["dataset"] = "Train"
+                element["dataset"] = "Test"
             elif r < 1 - train_size:
                 element["dataset"] = "Val"
             else:
-                element["dataset"] = "Test"
+                element["dataset"] = "Train"
             yield element
 
     split_data = p | "SplitData" >> beam.ParDo(_SplitData())
@@ -202,14 +203,18 @@ class Inception(beam.DoFn):
         self._model = model
         self.initialized = True
 
-    def process(self, element):
+    def process(self, elements):
         if not self.initialized:
             logging.info("Initializing model.")
             self.initialize()
-        logits = self._model.predict(element['image'])
-        del element['image']
-        element['logits'] = np.squeeze(logits).tolist()
-        yield element
+        images = [x["image"] for x in elements[0]]
+        stack = np.concatenate(images, axis=0)
+        logits = self._model.predict(stack, batch_size=len(elements))
+        for i in range(len(logits)):
+            output = elements[0][i]
+            del output["image"]
+            output["logits"] = np.squeeze(logits[i]).tolist()
+            yield output
 
 
 def extract_label(element):
@@ -265,7 +270,8 @@ def create_filenames(p, files):
         | "CreateFilePattern" >> beam.Create(files)
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         | "FilterVideos" >> beam.Filter(
-            lambda x: x["filename"].split(".")[-1] in ["mkv", "avi", "mp4"]))
+            lambda x: x["filename"].split(".")[-1] in ["mkv", "avi", "mp4"]
+            and x["filename"].split("/")[-2] == "360P"))
     return filenames
 
 
@@ -332,8 +338,17 @@ def build_pipeline(p, args):
         filenames
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
-        | "ApplyInception" >> beam.ParDo(Inception()))
-    
+        | beam.Map(lambda x: beam.window.TimestampedValue(x, int(time.time())))
+        # Ensure that all samples are the same size
+        | beam.Map(lambda x: (x["image"].shape, x))
+        | beam.GroupByKey()
+        # TODO: add early firing
+        | beam.WindowInto(beam.window.FixedWindows(10))
+        | beam.CombinePerKey(combiners.ToListCombineFn())
+        | beam.Map(lambda x: x[1])
+        | "ApplyInception" >> beam.ParDo(Inception())
+        | "Global" >> beam.WindowInto(beam.window.GlobalWindows())
+    )
     if args.mode == "crop_video":
         frames = frames | "CropVideo" >> crop_video(args)
     elif args.mode == "full_video":
@@ -343,7 +358,7 @@ def build_pipeline(p, args):
     
     all_frames = frames | "FormatFeatures" >> format_features()
 
-    for dataset_type in ['Train', 'Val', 'Test']:
+    for dataset_type in ["Train", "Val", "Test"]:
         dataset = (
             all_frames
             | "Get{}Data".format(dataset_type) >> beam.Filter(
