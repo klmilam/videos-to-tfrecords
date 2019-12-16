@@ -319,6 +319,31 @@ def format_features(p):
     return all_frames
 
 
+@beam.ptransform_fn
+def apply_inception(p):
+
+    @beam.ptransform_fn
+    def batch_frames(frames):
+        batch = (
+            frames
+            | "CreateTimestampedValue" >> beam.Map(
+                lambda x: beam.window.TimestampedValue(x, int(time.time())))
+            | "KeyByFrameSize" >> beam.Map(lambda x: (x["image"].shape, x))
+            | "GroupByFrameSize" >> beam.GroupByKey()
+            # TODO: add early firing
+            | "TagWithBatch" >> beam.WindowInto(beam.window.FixedWindows(10))
+            | "CombineWithBatch" >> beam.CombinePerKey(combiners.ToListCombineFn())
+            | "UnKey" >> beam.Map(lambda x: x[1]))
+        return batch
+
+    output = (
+        p
+        | "BatchFrames" >> batch_frames()
+        | "ApplyInception" >> beam.ParDo(Inception())
+        | "ConvertToBatch" >> beam.WindowInto(beam.window.GlobalWindows()))
+    return output
+
+
 def build_pipeline(p, args):
     """Creates Apache Beam pipeline."""
     if args.cloud:
@@ -338,17 +363,8 @@ def build_pipeline(p, args):
         filenames
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
-        | beam.Map(lambda x: beam.window.TimestampedValue(x, int(time.time())))
-        # Ensure that all samples are the same size
-        | beam.Map(lambda x: (x["image"].shape, x))
-        | beam.GroupByKey()
-        # TODO: add early firing
-        | beam.WindowInto(beam.window.FixedWindows(10))
-        | beam.CombinePerKey(combiners.ToListCombineFn())
-        | beam.Map(lambda x: x[1])
-        | "ApplyInception" >> beam.ParDo(Inception())
-        | "Global" >> beam.WindowInto(beam.window.GlobalWindows())
-    )
+        | "ApplyBatchesAndInception" >> apply_inception())
+
     if args.mode == "crop_video":
         frames = frames | "CropVideo" >> crop_video(args)
     elif args.mode == "full_video":
