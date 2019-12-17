@@ -14,7 +14,8 @@
 """Build preprocessing pipeline."""
 
 import apache_beam as beam
-from apache_beam.transforms import combiners, trigger
+from apache_beam.transforms import combiners, window
+from apache_beam.utils.windowed_value import WindowedValue
 import tensorflow as tf
 import numpy as np
 import logging
@@ -186,10 +187,10 @@ class Inception(beam.DoFn):
     Predictions occur similarly to the Predict class in
     https://github.com/GoogleCloudPlatform/healthcare/blob/master/datathon/datathon_etl_pipelines/generic_imaging/inference_to_bigquery.py
     """
-    def __init__(self):
+    def __init__(self, batch_size):
         self._model = None
         self.initialized = False
-        self.batch_size = 16
+        self.batch_size = batch_size
         self.batches = {}
 
     def initialize(self):
@@ -206,7 +207,15 @@ class Inception(beam.DoFn):
         self.initialized = True
 
     def finish_bundle(self):
-        print("end")
+        tf.logging.info("End of bundle of elements. Run predictions on remainder.")
+        for elements in self.batches.values():
+            outputs = self.make_predictions(elements)
+            for output in outputs:
+                yield WindowedValue(
+                    value=output,
+                    timestamp=int(time.time()),
+                    windows=(window.GlobalWindow(),))
+        self.batches = {}
 
     def make_predictions(self, elements):
         images = [element["image"] for element in elements]
@@ -216,16 +225,14 @@ class Inception(beam.DoFn):
         for i in range(len(images)):
             element = elements[i]
             del element["image"]
-            element["logits"] = preds[i]
+            element["logits"] = preds[i].tolist()
             outputs.append(element)
         return outputs
-
 
     def process(self, element):
         if not self.initialized:
             logging.info("Initializing model.")
             self.initialize()
-        # self.batch.append(element)
         shape = element["image"].shape
         if shape in self.batches:
             self.batches[shape].append(element)
@@ -235,7 +242,10 @@ class Inception(beam.DoFn):
             outputs = self.make_predictions(self.batches[shape])
             del self.batches[shape]
             for output in outputs:
-                yield output
+                yield WindowedValue(
+                    value=output,
+                    timestamp=int(time.time()),
+                    windows=(window.GlobalWindow(),))
 
 
 def extract_label(element):
@@ -340,37 +350,6 @@ def format_features(p):
     return all_frames
 
 
-@beam.ptransform_fn
-def apply_inception(p):
-
-    @beam.ptransform_fn
-    def batch_frames(frames):
-        batch = (
-            frames
-            | "CreateTimestampedValue" >> beam.Map(
-                lambda x: beam.window.TimestampedValue(x, int(time.time())))
-            | "KeyByFrameSize" >> beam.Map(lambda x: (x["image"].shape, x))
-            | "GroupByFrameSize" >> beam.GroupByKey()
-            # TODO: add early firing
-            | "TagWithBatch" >> beam.WindowInto(
-                beam.window.FixedWindows(10),
-                trigger=trigger.Repeatedly(
-                    early=trigger.AfterAny(trigger.AfterCount(32))),
-                accumulation_mode=trigger.AccumulationMode.ACCUMULATING)
-            | "CombineWithBatch" >> beam.CombinePerKey(
-                combiners.ToListCombineFn())
-            | "UnKey" >> beam.Map(lambda x: x[1]))
-        return batch
-
-    output = (
-        p
-        #| "BatchFrames" >> batch_frames()
-        | "ApplyInception" >> beam.ParDo(Inception())
-        #| "ConvertToBatch" >> beam.WindowInto(beam.window.GlobalWindows())
-    )
-    return output
-
-
 def build_pipeline(p, args):
     """Creates Apache Beam pipeline."""
     if args.cloud:
@@ -390,25 +369,25 @@ def build_pipeline(p, args):
         filenames
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
-        | "ApplyBatchesAndInception" >> apply_inception())
+        | "ApplyInception" >> beam.ParDo(Inception(args.batch_size)))
     frames | beam.Map(print)
-    # if args.mode == "crop_video":
-    #     frames = frames | "CropVideo" >> crop_video(args)
-    # elif args.mode == "full_video":
-    #     frames = frames | "ToFullVideo" >> to_full_video(args) 
-    # else:
-    #     frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
+    if args.mode == "crop_video":
+        frames = frames | "CropVideo" >> crop_video(args)
+    elif args.mode == "full_video":
+        frames = frames | "ToFullVideo" >> to_full_video(args) 
+    else:
+        frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
     
-    # all_frames = frames | "FormatFeatures" >> format_features()
+    all_frames = frames | "FormatFeatures" >> format_features()
 
-    # for dataset_type in ["Train", "Val", "Test"]:
-    #     dataset = (
-    #         all_frames
-    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
-    #             lambda x: x["dataset"] == dataset_type)
-    #         | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
-    #             generate_seq_example))
-    #     write_label = 'Write{}TFRecord'.format(dataset_type)
-    #     dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
-    #     if not args.cloud:  # if running locally, print SequenceExamples
-    #         dataset | "p{}".format(dataset_type) >> beam.Map(print)
+    for dataset_type in ["Train", "Val", "Test"]:
+        dataset = (
+            all_frames
+            | "Get{}Data".format(dataset_type) >> beam.Filter(
+                lambda x: x["dataset"] == dataset_type)
+            | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
+                generate_seq_example))
+        write_label = 'Write{}TFRecord'.format(dataset_type)
+        dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
+        if not args.cloud:  # if running locally, print SequenceExamples
+            dataset | "p{}".format(dataset_type) >> beam.Map(print)
