@@ -14,7 +14,7 @@
 """Build preprocessing pipeline."""
 
 import apache_beam as beam
-from apache_beam.transforms import combiners
+from apache_beam.transforms import combiners, trigger
 import tensorflow as tf
 import numpy as np
 import logging
@@ -183,12 +183,14 @@ class VideoToFrames(beam.DoFn):
 class Inception(beam.DoFn):
     """Transform to extract Inception-V3 bottleneck features.
 
-    Similar to Predict class in
+    Predictions occur similarly to the Predict class in
     https://github.com/GoogleCloudPlatform/healthcare/blob/master/datathon/datathon_etl_pipelines/generic_imaging/inference_to_bigquery.py
     """
     def __init__(self):
         self._model = None
         self.initialized = False
+        self.batch_size = 16
+        self.batches = {}
 
     def initialize(self):
         """Initializes the model on the workers."""
@@ -203,18 +205,37 @@ class Inception(beam.DoFn):
         self._model = model
         self.initialized = True
 
-    def process(self, elements):
+    def finish_bundle(self):
+        print("end")
+
+    def make_predictions(self, elements):
+        images = [element["image"] for element in elements]
+        stack = np.concatenate(images, axis=0)
+        preds = self._model.predict(stack, batch_size=len(images))
+        outputs = []
+        for i in range(len(images)):
+            element = elements[i]
+            del element["image"]
+            element["logits"] = preds[i]
+            outputs.append(element)
+        return outputs
+
+
+    def process(self, element):
         if not self.initialized:
             logging.info("Initializing model.")
             self.initialize()
-        images = [x["image"] for x in elements[0]]
-        stack = np.concatenate(images, axis=0)
-        logits = self._model.predict(stack, batch_size=len(elements))
-        for i in range(len(logits)):
-            output = elements[0][i]
-            del output["image"]
-            output["logits"] = np.squeeze(logits[i]).tolist()
-            yield output
+        # self.batch.append(element)
+        shape = element["image"].shape
+        if shape in self.batches:
+            self.batches[shape].append(element)
+        else:
+            self.batches[shape] = [element]
+        if len(self.batches[shape]) > self.batch_size:
+            outputs = self.make_predictions(self.batches[shape])
+            del self.batches[shape]
+            for output in outputs:
+                yield output
 
 
 def extract_label(element):
@@ -331,16 +352,22 @@ def apply_inception(p):
             | "KeyByFrameSize" >> beam.Map(lambda x: (x["image"].shape, x))
             | "GroupByFrameSize" >> beam.GroupByKey()
             # TODO: add early firing
-            | "TagWithBatch" >> beam.WindowInto(beam.window.FixedWindows(10))
-            | "CombineWithBatch" >> beam.CombinePerKey(combiners.ToListCombineFn())
+            | "TagWithBatch" >> beam.WindowInto(
+                beam.window.FixedWindows(10),
+                trigger=trigger.Repeatedly(
+                    early=trigger.AfterAny(trigger.AfterCount(32))),
+                accumulation_mode=trigger.AccumulationMode.ACCUMULATING)
+            | "CombineWithBatch" >> beam.CombinePerKey(
+                combiners.ToListCombineFn())
             | "UnKey" >> beam.Map(lambda x: x[1]))
         return batch
 
     output = (
         p
-        | "BatchFrames" >> batch_frames()
+        #| "BatchFrames" >> batch_frames()
         | "ApplyInception" >> beam.ParDo(Inception())
-        | "ConvertToBatch" >> beam.WindowInto(beam.window.GlobalWindows()))
+        #| "ConvertToBatch" >> beam.WindowInto(beam.window.GlobalWindows())
+    )
     return output
 
 
@@ -364,24 +391,24 @@ def build_pipeline(p, args):
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyBatchesAndInception" >> apply_inception())
-
-    if args.mode == "crop_video":
-        frames = frames | "CropVideo" >> crop_video(args)
-    elif args.mode == "full_video":
-        frames = frames | "ToFullVideo" >> to_full_video(args) 
-    else:
-        frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
+    frames | beam.Map(print)
+    # if args.mode == "crop_video":
+    #     frames = frames | "CropVideo" >> crop_video(args)
+    # elif args.mode == "full_video":
+    #     frames = frames | "ToFullVideo" >> to_full_video(args) 
+    # else:
+    #     frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
     
-    all_frames = frames | "FormatFeatures" >> format_features()
+    # all_frames = frames | "FormatFeatures" >> format_features()
 
-    for dataset_type in ["Train", "Val", "Test"]:
-        dataset = (
-            all_frames
-            | "Get{}Data".format(dataset_type) >> beam.Filter(
-                lambda x: x["dataset"] == dataset_type)
-            | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
-                generate_seq_example))
-        write_label = 'Write{}TFRecord'.format(dataset_type)
-        dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
-        if not args.cloud:  # if running locally, print SequenceExamples
-            dataset | "p{}".format(dataset_type) >> beam.Map(print)
+    # for dataset_type in ["Train", "Val", "Test"]:
+    #     dataset = (
+    #         all_frames
+    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
+    #             lambda x: x["dataset"] == dataset_type)
+    #         | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
+    #             generate_seq_example))
+    #     write_label = 'Write{}TFRecord'.format(dataset_type)
+    #     dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
+    #     if not args.cloud:  # if running locally, print SequenceExamples
+    #         dataset | "p{}".format(dataset_type) >> beam.Map(print)
