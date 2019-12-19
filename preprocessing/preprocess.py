@@ -139,9 +139,9 @@ def generate_download_signed_url_v4(service_account_file, bucket_name,
     blob = bucket.blob(blob_name)
 
     url = blob.generate_signed_url(
-        version='v4',
+        version="v4",
         expiration=datetime.timedelta(minutes=15),
-        method='GET')
+        method="GET")
     return url
 
 
@@ -155,7 +155,7 @@ class VideoToFrames(beam.DoFn):
         u = urllib.parse.urlparse(element["filename"])
         signed_url = generate_download_signed_url_v4(
             self.service_account_file, u.netloc, u.path[1:])
-        video = cv2.VideoCapture(signed_url)
+        video = cv2.VideoCapture(element["filename"])
 
         last_ts = -9999
         result, image = video.read()
@@ -189,25 +189,26 @@ class Inception(beam.DoFn):
     """
     def __init__(self, batch_size):
         self._model = None
-        self.initialized = False
         self.batch_size = batch_size
         self.batches = {}
 
-    def initialize(self):
+    def setup(self):
         """Initializes the model on the workers."""
+        logging.info("Initializing model.")
         inputs = tf.keras.Input(shape=(None, None, 3))
         inception_layer = hub.KerasLayer(
-            "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4",
+            hub.load(
+                "https://tfhub.dev/google/tf2-preview/inception_v3/feature_vector/4"),
             output_shape=2048,
             trainable=False
         )
         output = inception_layer(inputs)
         model = tf.keras.Model(inputs, output)
         self._model = model
-        self.initialized = True
 
     def finish_bundle(self):
-        tf.logging.info("End of bundle of elements. Run predictions on remainder.")
+        """Runs predictions on remaining elements at end of bundle of elements."""
+        logging.info("Run predictions on all intermediate elements.")
         for elements in self.batches.values():
             outputs = self.make_predictions(elements)
             for output in outputs:
@@ -218,10 +219,14 @@ class Inception(beam.DoFn):
         self.batches = {}
 
     def make_predictions(self, elements):
+        start_time = time.time()
         images = [element["image"] for element in elements]
         stack = np.concatenate(images, axis=0)
-        preds = self._model.predict(stack, batch_size=len(images))
+        preds = self._model.predict_on_batch(stack) # , batch_size=len(images))
+        pred_time = time.time() - start_time
+        logging.info("Prediction time: {}".format(pred_time))
         outputs = []
+        logging.info("Batch size: " + str(len(images)))
         for i in range(len(images)):
             element = elements[i]
             del element["image"]
@@ -230,15 +235,12 @@ class Inception(beam.DoFn):
         return outputs
 
     def process(self, element):
-        if not self.initialized:
-            logging.info("Initializing model.")
-            self.initialize()
         shape = element["image"].shape
         if shape in self.batches:
             self.batches[shape].append(element)
         else:
             self.batches[shape] = [element]
-        if len(self.batches[shape]) > self.batch_size:
+        if len(self.batches[shape]) >= self.batch_size:
             outputs = self.make_predictions(self.batches[shape])
             del self.batches[shape]
             for output in outputs:
@@ -246,12 +248,16 @@ class Inception(beam.DoFn):
                     value=output,
                     timestamp=int(time.time()),
                     windows=(window.GlobalWindow(),))
+        elif len(self.batches.values()) >= self.batch_size/2:
+            # TODO: fix so that it's counting total number of elements, not shapes
+            logging.info("Intermediate storage too large. Flushing.")
+            self.finish_bundle()
 
 
 def extract_label(element):
     """Extracts and appends label from filename.
 
-    Assumes there's one label per video.
+    Assumes there's only one label per video.
     """
     element["label"] = element["filename"].split("/")[-3]
     return element
@@ -302,7 +308,8 @@ def create_filenames(p, files):
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         | "FilterVideos" >> beam.Filter(
             lambda x: x["filename"].split(".")[-1] in ["mkv", "avi", "mp4"]
-            and x["filename"].split("/")[-2] == "360P"))
+            and x["filename"].split("/")[-2] == "360P"
+            ))
     return filenames
 
 
@@ -370,7 +377,6 @@ def build_pipeline(p, args):
         | "ExtractFrames" >> beam.ParDo(VideoToFrames(
             args.service_account_key_file, args.frame_sample_rate),  args.cloud)
         | "ApplyInception" >> beam.ParDo(Inception(args.batch_size)))
-    frames | beam.Map(print)
     if args.mode == "crop_video":
         frames = frames | "CropVideo" >> crop_video(args)
     elif args.mode == "full_video":
@@ -380,14 +386,15 @@ def build_pipeline(p, args):
     
     all_frames = frames | "FormatFeatures" >> format_features()
 
-    for dataset_type in ["Train", "Val", "Test"]:
-        dataset = (
-            all_frames
-            | "Get{}Data".format(dataset_type) >> beam.Filter(
-                lambda x: x["dataset"] == dataset_type)
-            | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
-                generate_seq_example))
-        write_label = 'Write{}TFRecord'.format(dataset_type)
-        dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
-        if not args.cloud:  # if running locally, print SequenceExamples
-            dataset | "p{}".format(dataset_type) >> beam.Map(print)
+    # for dataset_type in ["Train", "Val", "Test"]:
+    #     dataset = (
+    #         all_frames
+    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
+    #             lambda x: x["dataset"] == dataset_type)
+    #         | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
+    #             generate_seq_example))
+    #     write_label = 'Write{}TFRecord'.format(dataset_type)
+    #     dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
+    #     if not args.cloud:  # if running locally, print SequenceExamples
+    #         # dataset | "p{}".format(dataset_type) >> beam.Map(print)
+    #         pass
