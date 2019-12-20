@@ -43,7 +43,8 @@ def randomly_split(p, train_size, validation_size, test_size):
         validation_size: float, ratio of data going to validation set.
         test_size: float, ratio of data going to test set.
     Returns:
-        Tuple of PCollection.
+        Tuple of PCollections representing the training, validation, and
+        testing datasets.
     Raises:
         ValueError: Train validation and test sizes don`t add up to 1.0.
     """
@@ -62,7 +63,7 @@ def randomly_split(p, train_size, validation_size, test_size):
                 yield beam.pvalue.TaggedOutput("Val", element)
             else:
                 element["dataset"] = "Train"
-                yield beam.pvalue.TaggedOutput("Train", element)
+                yield element
 
     split_data = p | "SplitData" >> beam.ParDo(_SplitData()).with_outputs(
         "Val", "Test", main="Train")
@@ -79,7 +80,11 @@ def shuffle(p):
 
 
 def generate_seq_example(element):
-    """Generates a SequenceExample protocol message."""
+    """Generates a SequenceExample protocol message.
+
+    Per-frame features are added to the SequenceExample's feature list.
+    Per-video features are added to the SequenceExample's context.
+    """
     feature_list_dict = {}
     for feat, dtype in features.LIST_COLUMNS.items():
         feature_list = []
@@ -103,7 +108,7 @@ def generate_seq_example(element):
 
 @beam.ptransform_fn
 def WriteTFRecord(p, prefix, output_dir):
-    """Shuffles and write the given pCollection as a TF-Record.
+    """Shuffles and write the given pCollection as a TFRecord.
 
     Args:
         p: a pCollection.
@@ -222,6 +227,7 @@ class Inception(beam.DoFn):
         self.batches = {}
 
     def make_predictions(self, elements):
+        """Make predictions on a batch of elements."""
         start_time = time.time()
         images = [element["image"] for element in elements]
         stack = np.concatenate(images, axis=0)
@@ -238,20 +244,22 @@ class Inception(beam.DoFn):
         return outputs
 
     def process(self, element):
+        """Aggregate elements to batches and yield predictions."""
         shape = element["image"].shape
-        if shape in self.batches:
-            self.batches[shape].append(element)
+        dataset = element["dataset"]
+        if (dataset, shape) in self.batches:
+            self.batches[(dataset, shape)].append(element)
         else:
-            self.batches[shape] = [element]
-        if len(self.batches[shape]) >= self.batch_size:
-            outputs = self.make_predictions(self.batches[shape])
-            del self.batches[shape]
+            self.batches[(dataset, shape)] = [element]
+        if len(self.batches[(dataset, shape)]) >= self.batch_size:
+            outputs = self.make_predictions(self.batches[(dataset, shape)])
+            del self.batches[(dataset, shape)]
             for output in outputs:
                 yield WindowedValue(
                     value=output,
                     timestamp=int(time.time()),
                     windows=(window.GlobalWindow(),))
-        elif len(self.batches.values()) >= self.batch_size/2:
+        elif len(self.batches.values()) >= self.batch_size:
             # TODO: fix so that it's counting total number of elements, not shapes
             logging.info("Intermediate storage too large. Flushing.")
             self.finish_bundle()
@@ -311,7 +319,7 @@ def create_filenames(p, files):
         | "CreateDict" >> beam.Map(lambda x: {"filename": x})
         | "FilterVideos" >> beam.Filter(
             lambda x: x["filename"].split(".")[-1] in ["mkv", "avi", "mp4"]
-            and x["filename"].split("/")[-2] == "360P"
+            # and x["filename"].split("/")[-2] == "360P"
             ))
     return filenames
 
@@ -373,7 +381,7 @@ def build_pipeline(p, args):
         | "CreateFilenames" >> create_filenames(files)
         | "ExtractLabel" >> beam.Map(extract_label))
 
-    train, test, val = (
+    train, val, test = (
         filenames
         |  "RandomlySplitData" >> randomly_split(
             train_size=.7, validation_size=.15, test_size=.15))
@@ -392,7 +400,7 @@ def build_pipeline(p, args):
             frames = frames | "Crop{}Video".format(name) >> crop_video(args)
         elif args.mode == "full_video":
             frames = frames | "{}ToFullVideo".format(name) >> to_full_video(
-                args) 
+                args)
         else:
             frames = frames | "{}ToSingleFrame".format(name) >> beam.Map(
                 lambda x: [x])
