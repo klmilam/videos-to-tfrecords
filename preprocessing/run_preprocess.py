@@ -48,7 +48,7 @@ def parse_arguments(argv):
     parser.add_argument(
         "--machine_type",
         help="""Set machine type for Dataflow worker machines.""",
-        default="n1-highcpu-16")
+        default="n1-highmem-16")
     parser.add_argument(
         "--batch_size",
         help="Batch size for TensorFlow Hub predictions.",
@@ -98,8 +98,8 @@ def parse_arguments(argv):
     parser.add_argument(
         "--sequence_length",
         type=int,
-        help="""Length (in milliseconds) to crop each video sample. This corresponds
-        to window length.""",
+        help="""Length (in milliseconds) to crop each video sample, if
+        relevant. This corresponds to window length.""",
         default=15000)
     parser.add_argument(
         "--period",

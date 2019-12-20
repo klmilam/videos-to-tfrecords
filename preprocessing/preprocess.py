@@ -56,14 +56,17 @@ def randomly_split(p, train_size, validation_size, test_size):
             r = random.random()
             if r < test_size:
                 element["dataset"] = "Test"
+                yield beam.pvalue.TaggedOutput("Test", element)
             elif r < 1 - train_size:
                 element["dataset"] = "Val"
+                yield beam.pvalue.TaggedOutput("Val", element)
             else:
                 element["dataset"] = "Train"
-            yield element
+                yield beam.pvalue.TaggedOutput("Train", element)
 
-    split_data = p | "SplitData" >> beam.ParDo(_SplitData())
-    return split_data
+    split_data = p | "SplitData" >> beam.ParDo(_SplitData()).with_outputs(
+        "Val", "Test", main="Train")
+    return split_data["Train"], split_data["Val"], split_data["Test"]
 
 
 @beam.ptransform_fn
@@ -155,7 +158,7 @@ class VideoToFrames(beam.DoFn):
         u = urllib.parse.urlparse(element["filename"])
         signed_url = generate_download_signed_url_v4(
             self.service_account_file, u.netloc, u.path[1:])
-        video = cv2.VideoCapture(element["filename"])
+        video = cv2.VideoCapture(signed_url)
 
         last_ts = -9999
         result, image = video.read()
@@ -368,33 +371,38 @@ def build_pipeline(p, args):
     filenames = (
         p
         | "CreateFilenames" >> create_filenames(files)
-        | "RandomlySplitData" >> randomly_split(
-            train_size=.7, validation_size=.15, test_size=.15)
         | "ExtractLabel" >> beam.Map(extract_label))
 
-    frames = (
+    train, test, val = (
         filenames
-        | "ExtractFrames" >> beam.ParDo(VideoToFrames(
-            args.service_account_key_file, args.frame_sample_rate),  args.cloud)
-        | "ApplyInception" >> beam.ParDo(Inception(args.batch_size)))
-    if args.mode == "crop_video":
-        frames = frames | "CropVideo" >> crop_video(args)
-    elif args.mode == "full_video":
-        frames = frames | "ToFullVideo" >> to_full_video(args) 
-    else:
-        frames = frames | "ToSingleFrame" >> beam.Map(lambda x: [x])
-    
-    all_frames = frames | "FormatFeatures" >> format_features()
+        |  "RandomlySplitData" >> randomly_split(
+            train_size=.7, validation_size=.15, test_size=.15))
 
-    # for dataset_type in ["Train", "Val", "Test"]:
-    #     dataset = (
-    #         all_frames
-    #         | "Get{}Data".format(dataset_type) >> beam.Filter(
-    #             lambda x: x["dataset"] == dataset_type)
-    #         | "Convert{}ToSeqExamples".format(dataset_type) >> beam.Map(
-    #             generate_seq_example))
-    #     write_label = 'Write{}TFRecord'.format(dataset_type)
-    #     dataset | write_label >> WriteTFRecord(dataset_type, args.output_dir)
-    #     if not args.cloud:  # if running locally, print SequenceExamples
-    #         # dataset | "p{}".format(dataset_type) >> beam.Map(print)
-    #         pass
+    for name, dataset in [("Train", train),
+                          ("Val", val),
+                          ("Test", test)]:
+        frames = (
+            dataset
+            | "Extract{}Frames".format(name) >> beam.ParDo(VideoToFrames(
+                args.service_account_key_file, args.frame_sample_rate),
+                args.cloud)
+            | "ApplyInceptionTo{}".format(name) >> beam.ParDo(Inception(
+                args.batch_size)))
+        if args.mode == "crop_video":
+            frames = frames | "Crop{}Video".format(name) >> crop_video(args)
+        elif args.mode == "full_video":
+            frames = frames | "{}ToFullVideo".format(name) >> to_full_video(
+                args) 
+        else:
+            frames = frames | "{}ToSingleFrame".format(name) >> beam.Map(
+                lambda x: [x])
+
+        examples = (
+            frames
+            | "Format{}Features".format(name) >> format_features()
+            | "Convert{}ToSeqExamples".format(name) >> beam.Map(
+                generate_seq_example))
+        examples | 'Write{}TFRecord'.format(name) >> WriteTFRecord(
+            name, args.output_dir)
+        if not args.cloud:  # if running locally, print SequenceExamples
+            examples | "p{}".format(name) >> beam.Map(print)
