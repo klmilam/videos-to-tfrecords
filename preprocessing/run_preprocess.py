@@ -33,7 +33,7 @@ def parse_arguments(argv):
     parser.add_argument(
         "--cloud",
         help="""Run preprocessing on the cloud. Default False.""",
-        action='store_true',
+        action="store_true",
         default=False)
     parser.add_argument(
         "--job_name",

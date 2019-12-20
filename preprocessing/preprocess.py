@@ -74,9 +74,9 @@ def randomly_split(p, train_size, validation_size, test_size):
 def shuffle(p):
     """Shuffles the given pCollection."""
     return (p
-            | 'PairWithRandom' >> beam.Map(lambda x: (random.random(), x))
-            | 'GroupByRandom' >> beam.GroupByKey()
-            | 'DropRandom' >> beam.FlatMap(lambda x: x[1]))
+            | "PairWithRandom" >> beam.Map(lambda x: (random.random(), x))
+            | "GroupByRandom" >> beam.GroupByKey()
+            | "DropRandom" >> beam.FlatMap(lambda x: x[1]))
 
 
 def generate_seq_example(element):
@@ -117,13 +117,13 @@ def WriteTFRecord(p, prefix, output_dir):
     """
     coder = beam.coders.ProtoCoder(tf.train.SequenceExample)
     prefix = str(prefix).lower()
-    out_dir = os.path.join(output_dir, 'data', prefix, prefix)
+    out_dir = os.path.join(output_dir, "data", prefix, prefix)
     logging.warning("writing TFrecords to "+ out_dir)
     (
         p
         | "ShuffleData" >> shuffle()  # pylint: disable=no-value-for-parameter
         | "WriteTFRecord" >> beam.io.tfrecordio.WriteToTFRecord(
-            os.path.join(output_dir, 'data', prefix, prefix),
+            os.path.join(output_dir, "data", prefix, prefix),
             coder=coder,
             file_name_suffix=".tfrecord"))
 
@@ -410,7 +410,7 @@ def build_pipeline(p, args):
             | "Format{}Features".format(name) >> format_features()
             | "Convert{}ToSeqExamples".format(name) >> beam.Map(
                 generate_seq_example))
-        examples | 'Write{}TFRecord'.format(name) >> WriteTFRecord(
+        examples | "Write{}TFRecord".format(name) >> WriteTFRecord(
             name, args.output_dir)
         if not args.cloud:  # if running locally, print SequenceExamples
             examples | "p{}".format(name) >> beam.Map(print)
