@@ -23,7 +23,7 @@ REQUIRED_PACKAGES = ["opencv-python",
                      "google-cloud-storage",
                      "google-resumable-media==0.5.0",
                      "tensorflow_hub>=0.6.0",
-                     "tensorflow==2.0.0"
+                     "tensorflow==2.5.1"
                      ]
 
 setup(
